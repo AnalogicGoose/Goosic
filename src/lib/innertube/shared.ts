@@ -105,6 +105,11 @@ async function sha1Hex(text: string): Promise<string> {
 const COOKIE_CACHE_TTL_MS = 5 * 60 * 1000;
 let cookieCache: { value: string; loadedAt: number } | null = null;
 let cookiePromise: Promise<string> | null = null;
+// Bumped by resetAuthCache(). An in-flight load captures the epoch at start
+// and discards its result if a reset happened meanwhile — otherwise the
+// pre-reset value would be written back and served for the whole TTL after
+// a sign-in/out completes mid-fetch.
+let cookieEpoch = 0;
 
 async function loadCookieHeader(): Promise<string> {
   const now = Date.now();
@@ -112,18 +117,21 @@ async function loadCookieHeader(): Promise<string> {
     return cookieCache.value;
   }
   if (cookiePromise) return cookiePromise;
+  const epoch = cookieEpoch;
   cookiePromise = invoke<string>("get_cookie_header", {
     host: "music.youtube.com",
   })
     .then(
       (value) => {
-        cookieCache = { value, loadedAt: Date.now() };
         cookiePromise = null;
+        if (epoch !== cookieEpoch) return "";
+        cookieCache = { value, loadedAt: Date.now() };
         return value;
       },
       () => {
-        cookieCache = { value: "", loadedAt: Date.now() };
         cookiePromise = null;
+        if (epoch !== cookieEpoch) return "";
+        cookieCache = { value: "", loadedAt: Date.now() };
         return "";
       },
     );
@@ -137,6 +145,7 @@ async function loadCookieHeader(): Promise<string> {
 export function resetAuthCache(): void {
   cookieCache = null;
   cookiePromise = null;
+  cookieEpoch++;
 }
 
 /**

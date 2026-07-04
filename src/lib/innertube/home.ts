@@ -12,6 +12,16 @@ export type HomeFeedPage = {
   nextCursor?: string;
 };
 
+// djb2 hash → short base36 tag. Continuation tokens share a long leading
+// prefix, so `cursor.slice(0, 12)` collided across pages and produced
+// duplicate React keys for header-less/repeated-title shelves; hashing the
+// whole token gives a stable, page-unique tag instead.
+function hashToken(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
 export async function fetchHomeFeedPage(
   cursor?: string,
 ): Promise<HomeFeedPage> {
@@ -25,7 +35,7 @@ export async function fetchHomeFeedPage(
 
   const shelfNodes = collectShelfNodes(sections);
 
-  const cursorTag = cursor ? cursor.slice(0, 12) : "init";
+  const cursorTag = cursor ? hashToken(cursor) : "init";
   // Track titles per page so duplicate-titled shelves get a stable
   // unique suffix instead of leaking the index into the id. The old
   // `${cursorTag}-${title}-${i}` would re-seat shelves whenever YT

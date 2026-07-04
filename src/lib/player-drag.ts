@@ -119,9 +119,11 @@ export function usePlayerCoverDrag({ enabled = true }: { enabled?: boolean } = {
   const onPointerDown = useCallback<React.PointerEventHandler<HTMLElement>>(
     (e) => {
       if (!enabled) return;
-      // Left button only; ignore touch/pen ambiguity by also requiring
-      // primary pointer.
+      // Left button only; ignore touch/pen ambiguity by also requiring the
+      // primary pointer — a second simultaneous touch would otherwise
+      // clobber startRef/draggingRef and stack a duplicate set of listeners.
       if (e.button !== 0) return;
+      if (!e.isPrimary) return;
       const target: HTMLElement = e.currentTarget;
       startRef.current = { x: e.clientX, y: e.clientY };
       draggingRef.current = false;

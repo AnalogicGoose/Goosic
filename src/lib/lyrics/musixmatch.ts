@@ -200,6 +200,10 @@ async function findTrackId(
       method: "GET",
       headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
     });
+    // A stale/flagged token can be rejected at the HTTP layer (401/403),
+    // not only via the envelope status_code — treat both as auth failures
+    // so the token-invalidate-and-retry path actually fires.
+    if (r.status === 401 || r.status === 403) return "auth-failure";
     if (!r.ok) return null;
     const json = (await r.json()) as MxmEnvelope<MxmSearchBody>;
     if (json?.message?.header?.status_code === 401) return "auth-failure";
@@ -233,6 +237,7 @@ async function getSubtitle(
       method: "GET",
       headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
     });
+    if (r.status === 401 || r.status === 403) return "auth-failure";
     if (!r.ok) return null;
     const json = (await r.json()) as MxmEnvelope<MxmSubtitleBody>;
     if (json?.message?.header?.status_code === 401) return "auth-failure";
@@ -258,6 +263,7 @@ async function getPlainLyrics(
       method: "GET",
       headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
     });
+    if (r.status === 401 || r.status === 403) return "auth-failure";
     if (!r.ok) return null;
     const json = (await r.json()) as MxmEnvelope<MxmLyricsBody>;
     if (json?.message?.header?.status_code === 401) return "auth-failure";

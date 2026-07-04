@@ -289,7 +289,10 @@ export function TrackMenuItems({
       </Item>
 
       <Sub>
-        <SubTrigger onPointerEnter={primeUserPlaylists}>
+        <SubTrigger
+          onPointerEnter={primeUserPlaylists}
+          onFocus={primeUserPlaylists}
+        >
           <ListMusicIcon />
           Add to playlist
         </SubTrigger>
