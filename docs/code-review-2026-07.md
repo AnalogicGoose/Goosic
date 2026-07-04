@@ -63,7 +63,9 @@
 - **low (perf/рефакторинг):** track-list per-row observers (#415), grab-bag player-bar (#1), ре-рендер карточки (#387), дедуп форматтеров (#36), infinite-scroll boilerplate; `noUncheckedIndexedAccess` (большая типизация Record<any>-слоя); per-account бакеты (search-history, pinned); query-cache per-account/stringify perf; CSP-сужение (dev/prod один конфиг); tooltip-drag (#251), sticky lyrics-source pref (#102).
 - **Rust low:** plaintext-куки на non-Windows (#123), гонка accounts.json RMW (#212), утечка login-профиля (#399), by-design экспозиция кук (#611) — платформенные/лайфсайкл-вещи, отложены.
 
-**Не сделано из high #11 (страховка):** git — есть ✅; ESLint/Prettier/vitest/CI — **ещё нет** (следующий разумный шаг).
+**High #11 (страховка) — закрыт полностью (2026-07-03).** git ✅; добавлены ESLint (flat config) + Prettier + vitest (22 теста на чистую логику из ревью — parse-lrc/offset, Genius-match, track-count) + GitHub Actions CI (typecheck+lint+test+build+cargo test). Хелперы вынесены в чистые модули (`lyrics/match.ts`, `innertube/parse-count.ts`) для тестируемости. Плюс 2 Rust-теста, включая **`nested_token_prefix_gates_routes`** — детерминированно проверяет auth-токен прокси (#1), снимая прежнюю оговорку про рантайм-смоук-тест маршрутизации.
+
+**Все гейты зелёные на `main`:** `tsc` · `eslint` (0 ошибок) · `vitest` 22/22 · `vite build` · `cargo test` 2/2. Ветка `fix/review-p0` влита в `main` (14 коммитов). Остаётся только пользовательский смоук-тест **аудио**-воспроизведения (проверяется ушами — код-путь и маршрутизация уже под тестами).
 
 Уточнённые вердикты и фиксы — в разделах «Высокие»/«Средние»/«Низкие» ниже. **Итог верификации: из 72 находок 0 ложных.**
 
