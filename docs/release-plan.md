@@ -189,25 +189,30 @@ Premium-фича «загрузки»). Перед релизом:
       воспроизведение (free и premium аккаунты)
 
 ### Этап 1 — GitHub
-- [ ] Создать публичный репозиторий `YTubic`, запушить — иконка-блокер снят;
-      нужен GitHub-ник Георгия; gh CLI не установлен → создавать через сайт или
-      `winget install GitHub.cli`
+- [x] Публичный репозиторий создан и запушен — **https://github.com/NUber-dev/YTubic**
+      (2026-07-05); Discussions включены, топики добавлены; gh CLI установлен и
+      авторизован
 - [ ] README: скриншоты приложения (остальное — установка, FAQ — уже готово)
 - [x] Issue templates (`.github/ISSUE_TEMPLATE/bug_report.yml`,
-      `feature_request.yml`); Discussions включить после создания репо
+      `feature_request.yml`)
 - [x] CI-релиз: `.github/workflows/release.yml` (tauri-action, draft-release на
-      тег `v*`, env под ключи апдейтера уже прописаны)
+      тег `v*`); секрет `TAURI_SIGNING_PRIVATE_KEY` загружен в репо
 
 ### Этап 2 — обновления
-- [ ] tauri-plugin-updater + ключи подписи + latest.json через Releases
-- [ ] Оживить кнопку «Updates»: тихая проверка при старте, ручная проверка, прогресс,
-      relaunch
+- [x] tauri-plugin-updater + tauri-plugin-process; ключи: приватный —
+      `C:\Users\ivasy\.tauri\ytubic.key` (**беречь!**, копия в GitHub Secrets),
+      публичный зашит в tauri.conf.json; endpoint —
+      `NUber-dev/YTubic/releases/latest/download/latest.json`; targets → ["nsis"],
+      createUpdaterArtifacts on
+- [x] Кнопка «Check for Updates» + тихая проверка при старте (src/lib/updater.ts):
+      тосты, прогресс скачивания, Restart now; в dev-режиме отключено
 - [ ] Проверить цепочку v0.1.0 → v0.1.1 на реальной установке
 
 ### Этап 3 — About и Report Issue
 - [ ] About-диалог: версия, credits (yt-dlp, LRCLIB, Musixmatch, Genius, Tauri, …),
       дисклеймер, ссылки
-- [ ] Report Issue → предзаполненный GitHub issue с диагностикой (версия, ОС, yt-dlp)
+- [x] Report Issue → предзаполненный GitHub issue с диагностикой (версия, ОС) —
+      открывает `NUber-dev/YTubic/issues/new` через plugin-opener
 - [ ] (опц.) экран Third-party licenses
 
 ### Этап 4 — релиз v0.1.0

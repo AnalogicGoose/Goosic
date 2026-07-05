@@ -26,7 +26,6 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,6 +49,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { useLayoutStore, type LayoutMode } from "@/lib/store/layout";
 import { checkForUpdates } from "@/lib/updater";
+import { AboutDialog } from "@/components/layout/about-dialog";
 
 // Caption-bar nav buttons get just an icon-color shift on hover —
 // the default ghost-button square highlight competes visually with
@@ -73,6 +73,7 @@ export function TopBar() {
   const router = useRouter();
   const [maximized, setMaximized] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -145,10 +146,9 @@ export function TopBar() {
                 <DownloadIcon />
                 Check for Updates
               </DropdownMenuItem>
-              <DropdownMenuItem disabled>
+              <DropdownMenuItem onSelect={() => setAboutOpen(true)}>
                 <InfoIcon />
                 About
-                <SoonBadge />
               </DropdownMenuItem>
 
               <DropdownMenuSeparator />
@@ -218,18 +218,8 @@ export function TopBar() {
       </header>
 
       <ReportIssueDialog open={reportOpen} onOpenChange={setReportOpen} />
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </>
-  );
-}
-
-function SoonBadge() {
-  return (
-    <Badge
-      variant="outline"
-      className="ml-auto h-4 px-1.5 text-[10px] font-medium"
-    >
-      Soon
-    </Badge>
   );
 }
 
