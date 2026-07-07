@@ -383,6 +383,140 @@ fn cookies_to_netscape(cookies: &[cookie::Cookie<'static>]) -> String {
     out
 }
 
+/// One line of a Netscape jar, kept as stored so a rewrite preserves
+/// entries we don't touch byte-for-byte.
+struct JarEntry {
+    domain: String,
+    include_sub: String,
+    path: String,
+    secure: String,
+    expiry: i64,
+    name: String,
+    value: String,
+}
+
+/// Apply `Set-Cookie` response headers to a Netscape jar, the way a
+/// browser would: update the value/expiry of a cookie we already hold,
+/// add cookies we don't, and drop cookies the server expires
+/// (`Max-Age=0` / past `Expires`). Only google/youtube domains are
+/// accepted — same filter as the login capture.
+///
+/// Returns `(new_jar, value_changed, needs_write)`:
+/// `value_changed` — a cookie value was replaced, added or removed, so
+/// cached Cookie headers are stale; `needs_write` additionally covers
+/// attribute-only refreshes (expiry bumps) that should persist but
+/// don't invalidate caches.
+fn merge_set_cookies_into_jar(
+    jar: &str,
+    set_cookies: &[String],
+    host: &str,
+    now_ts: i64,
+) -> (String, bool, bool) {
+    let mut entries: Vec<JarEntry> = Vec::new();
+    for line in jar.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() < 7 {
+            continue;
+        }
+        entries.push(JarEntry {
+            domain: f[0].to_string(),
+            include_sub: f[1].to_string(),
+            path: f[2].to_string(),
+            secure: f[3].to_string(),
+            expiry: f[4].parse().unwrap_or(0),
+            name: f[5].to_string(),
+            value: f[6].to_string(),
+        });
+    }
+
+    let mut value_changed = false;
+    let mut needs_write = false;
+
+    for raw in set_cookies {
+        let Ok(c) = cookie::Cookie::parse(raw.trim()) else {
+            continue;
+        };
+        // Host-only cookies (no Domain attribute) belong to the
+        // responding host.
+        let bare = c
+            .domain()
+            .unwrap_or(host)
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
+        let allowed = bare == "youtube.com"
+            || bare.ends_with(".youtube.com")
+            || bare == "google.com"
+            || bare.ends_with(".google.com");
+        if !allowed {
+            continue;
+        }
+
+        // Max-Age wins over Expires (RFC 6265 §4.1.2.2); either in the
+        // past is a deletion.
+        let (remove, expiry) = if let Some(ma) = c.max_age() {
+            let secs = ma.whole_seconds();
+            (secs <= 0, now_ts.saturating_add(secs))
+        } else if let Some(cookie::Expiration::DateTime(dt)) = c.expires() {
+            let ts = dt.unix_timestamp();
+            (ts <= now_ts, ts)
+        } else {
+            (false, 0) // session cookie
+        };
+
+        let pos = entries
+            .iter()
+            .position(|e| e.name == c.name() && e.domain.trim_start_matches('.') == bare);
+
+        if remove {
+            if let Some(i) = pos {
+                entries.remove(i);
+                value_changed = true;
+            }
+            continue;
+        }
+
+        match pos {
+            Some(i) => {
+                let e = &mut entries[i];
+                if e.value != c.value() {
+                    e.value = c.value().to_string();
+                    value_changed = true;
+                }
+                if e.expiry != expiry {
+                    e.expiry = expiry;
+                    needs_write = true;
+                }
+            }
+            None => {
+                entries.push(JarEntry {
+                    domain: format!(".{bare}"),
+                    include_sub: "TRUE".to_string(),
+                    path: c.path().unwrap_or("/").to_string(),
+                    secure: if c.secure().unwrap_or(false) { "TRUE" } else { "FALSE" }
+                        .to_string(),
+                    expiry,
+                    name: c.name().to_string(),
+                    value: c.value().to_string(),
+                });
+                value_changed = true;
+            }
+        }
+    }
+
+    needs_write |= value_changed;
+    let mut out = String::from("# Netscape HTTP Cookie File\n");
+    for e in &entries {
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            e.domain, e.include_sub, e.path, e.secure, e.expiry, e.name, e.value
+        ));
+    }
+    (out, value_changed, needs_write)
+}
+
 /// Stable "same account" key derived from an account's backfilled meta.
 /// Prefers the email; when that's empty (brand-channel identities, and
 /// some accounts, omit it from `/account_menu`) it falls back to the
@@ -531,6 +665,29 @@ async fn dedup_accounts_by_identity(app: &tauri::AppHandle) {
     eprintln!("[accounts] collapsed {removed} duplicate account row(s) by identity");
 }
 
+/// Best-effort cleanup of transient login artifacts, run once per boot:
+///
+/// - leftover per-login WebView profiles under `login-sessions/`. The
+///   post-login `remove_dir_all` regularly loses to WebView2 file locks
+///   (the browser subprocess outlives the window for a beat), and each
+///   stranded profile holds a signed-in Google session on disk. At boot
+///   no login window exists, so the locks are gone and deletion sticks.
+/// - the http plugin's `.cookies` store from builds where its `cookies`
+///   feature was still on: plaintext session-security cookies, and the
+///   shadow copy that fed the rotation-divergence bug.
+async fn cleanup_login_artifacts(app: &tauri::AppHandle) {
+    let cache = app
+        .path()
+        .app_cache_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
+    if let Ok(mut sessions) = tokio::fs::read_dir(cache.join("login-sessions")).await {
+        while let Ok(Some(entry)) = sessions.next_entry().await {
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        }
+    }
+    let _ = tokio::fs::remove_file(cache.join(".cookies")).await;
+}
+
 /// Open an in-app Google sign-in window in an isolated WebView profile
 /// and add the resulting cookies as a new account. Polls the (fresh)
 /// webview cookie store until YouTube auth cookies appear, encrypts
@@ -607,6 +764,9 @@ async fn start_login(app: tauri::AppHandle) -> Result<(), String> {
         // Guards against thrashing if YT auto-sign-in is slow and we
         // catch a Google-auth-only state on multiple ticks.
         let mut nudged_to_yt = false;
+        // Ticks spent waiting for the handshake to finish after auth
+        // cookies first appear (see below).
+        let mut full_set_grace: u8 = 0;
         loop {
             tokio::time::sleep(Duration::from_millis(1500)).await;
 
@@ -674,6 +834,23 @@ async fn start_login(app: tauri::AppHandle) -> Result<(), String> {
                         nudged_to_yt = true;
                     }
                 }
+                continue;
+            }
+
+            // SAPISID shows up before YouTube finishes its handshake;
+            // capturing at first sight used to miss LOGIN_INFO /
+            // VISITOR_INFO1_LIVE / YSC. Those make our replayed traffic
+            // look like the browser session Google issued it to, so
+            // give the handshake a few ticks to complete. Capture
+            // anyway after ~6 s in case the cookie set changes shape.
+            let has_login_info = cookies.iter().any(|c| {
+                c.name() == "LOGIN_INFO"
+                    && c.domain()
+                        .map(|d| d.trim_start_matches('.').ends_with("youtube.com"))
+                        .unwrap_or(false)
+            });
+            if !has_login_info && full_set_grace < 4 {
+                full_set_grace += 1;
                 continue;
             }
 
@@ -1275,6 +1452,78 @@ async fn get_auth_context(
             .and_then(|a| a.page_id.clone())
     };
     Ok(AuthContext { cookie, page_id })
+}
+
+/// Serializes read-modify-write cycles on the active cookie jar.
+/// Parallel InnerTube responses can each carry Set-Cookie rotations;
+/// without the lock two merges could interleave and drop one.
+#[derive(Default)]
+struct JarWriteLock(tokio::sync::Mutex<()>);
+
+/// Merge `Set-Cookie` headers from an InnerTube response into the
+/// active account's jar, mirroring what a browser would do. Google
+/// rotates session-security cookies (SIDCC / __Secure-*PSIDCC /
+/// LOGIN_INFO) right after sign-in and expects the client to echo the
+/// fresh values from then on; a client that keeps replaying the
+/// pre-rotation snapshot matches the stolen-cookie heuristic and the
+/// whole session gets revoked within hours (the v0.2.0 "library and
+/// Premium vanish" bug).
+///
+/// Returns `true` when a cookie VALUE changed — the frontend drops its
+/// cached Cookie header then. Missing jar / dead decrypt are quiet
+/// no-ops: rotation echo is best-effort and must never break the data
+/// call that triggered it.
+#[tauri::command]
+async fn merge_response_cookies(
+    app: tauri::AppHandle,
+    lock: tauri::State<'_, JarWriteLock>,
+    host: String,
+    set_cookies: Vec<String>,
+) -> Result<bool, String> {
+    if set_cookies.is_empty() {
+        return Ok(false);
+    }
+    let _guard = lock.0.lock().await;
+    let Some(path) = active_cookies_path(&app).await else {
+        return Ok(false);
+    };
+    let Ok(encrypted) = tokio::fs::read(&path).await else {
+        return Ok(false);
+    };
+    let Ok(Ok(plain)) =
+        tokio::task::spawn_blocking(move || secure_store::decrypt(&encrypted)).await
+    else {
+        return Ok(false);
+    };
+    let Ok(jar) = String::from_utf8(plain) else {
+        return Ok(false);
+    };
+
+    let now_ts = time::OffsetDateTime::now_utc().unix_timestamp();
+    let (merged, value_changed, needs_write) =
+        merge_set_cookies_into_jar(&jar, &set_cookies, &host, now_ts);
+    if !needs_write {
+        return Ok(false);
+    }
+
+    let bytes = merged.into_bytes();
+    let encrypted = tokio::task::spawn_blocking(move || secure_store::encrypt(&bytes))
+        .await
+        .map_err(|e| format!("encrypt join: {e}"))?
+        .map_err(|e| format!("encrypt cookies: {e}"))?;
+    // Write-then-rename: this path now runs on live rotations, not just
+    // at login, and a torn cookies.enc reads as "signed out".
+    let tmp = path.with_extension("enc.tmp");
+    tokio::fs::write(&tmp, &encrypted)
+        .await
+        .map_err(|e| format!("write jar tmp: {e}"))?;
+    tokio::fs::rename(&tmp, &path)
+        .await
+        .map_err(|e| format!("swap jar: {e}"))?;
+    if value_changed {
+        eprintln!("[auth] echoed rotated session cookie(s) into the active jar");
+    }
+    Ok(value_changed)
 }
 
 /// File (under the store plugin's default dir) + key holding the
@@ -2398,6 +2647,7 @@ pub fn run() {
         ))
         .manage(state)
         .manage(CloseBehavior::default())
+        .manage(JarWriteLock::default())
         .invoke_handler(tauri::generate_handler![
             ensure_ytdlp,
             resolve_stream_ytdlp,
@@ -2405,6 +2655,7 @@ pub fn run() {
             start_login,
             get_cookie_header,
             get_auth_context,
+            merge_response_cookies,
             is_logged_in,
             clear_cookies,
             list_accounts,
@@ -2485,6 +2736,7 @@ pub fn run() {
                 // Heal any duplicate account rows left by the old
                 // email-based dedup before the UI reads the list.
                 dedup_accounts_by_identity(&handle).await;
+                cleanup_login_artifacts(&handle).await;
                 start_stream_server(port, token, cache_dir, ephemeral_dir, cover_dir, ytdlp_bin)
                     .await;
             });
@@ -2560,5 +2812,77 @@ mod tests {
                 "no token must not reach the handler"
             );
         });
+    }
+
+    use super::merge_set_cookies_into_jar;
+
+    const NOW: i64 = 1_700_000_000;
+    const HOST: &str = "music.youtube.com";
+
+    fn jar() -> String {
+        "# Netscape HTTP Cookie File\n\
+         .youtube.com\tTRUE\t/\tTRUE\t1800000000\tSAPISID\told-sapisid\n\
+         .youtube.com\tTRUE\t/\tTRUE\t1800000000\tSIDCC\told-sidcc\n"
+            .to_string()
+    }
+
+    #[test]
+    fn merge_replaces_rotated_value() {
+        let lines = vec![
+            "SIDCC=new-sidcc; Domain=.youtube.com; Path=/; Secure; Max-Age=31536000".to_string(),
+        ];
+        let (out, changed, dirty) = merge_set_cookies_into_jar(&jar(), &lines, HOST, NOW);
+        assert!(changed && dirty);
+        assert!(out.contains("SIDCC\tnew-sidcc"));
+        assert!(!out.contains("old-sidcc"));
+        assert!(out.contains("SAPISID\told-sapisid"), "untouched cookie survives");
+    }
+
+    #[test]
+    fn merge_inserts_new_cookie_with_domain() {
+        let lines =
+            vec!["LOGIN_INFO=abc; Domain=.youtube.com; Path=/; Secure; HttpOnly; Max-Age=63072000"
+                .to_string()];
+        let (out, changed, _) = merge_set_cookies_into_jar(&jar(), &lines, HOST, NOW);
+        assert!(changed);
+        assert!(out.contains(".youtube.com\tTRUE\t/\tTRUE\t1763072000\tLOGIN_INFO\tabc"));
+    }
+
+    #[test]
+    fn merge_inserts_host_only_cookie_under_response_host() {
+        let lines = vec!["PZS=1; Path=/; Secure; Max-Age=600".to_string()];
+        let (out, changed, _) = merge_set_cookies_into_jar(&jar(), &lines, HOST, NOW);
+        assert!(changed);
+        assert!(out.contains(".music.youtube.com\tTRUE\t/\tTRUE"));
+    }
+
+    #[test]
+    fn merge_removes_expired_cookie() {
+        let lines = vec!["SIDCC=gone; Domain=.youtube.com; Path=/; Max-Age=0".to_string()];
+        let (out, changed, _) = merge_set_cookies_into_jar(&jar(), &lines, HOST, NOW);
+        assert!(changed);
+        assert!(!out.contains("SIDCC"));
+    }
+
+    #[test]
+    fn merge_ignores_foreign_domains() {
+        let lines = vec![
+            "tracker=1; Domain=.example.com; Path=/; Max-Age=1000".to_string(),
+            "__cf_bm=x; Domain=.genius.com; Path=/; Max-Age=1000".to_string(),
+        ];
+        let (out, changed, dirty) = merge_set_cookies_into_jar(&jar(), &lines, HOST, NOW);
+        assert!(!changed && !dirty);
+        assert_eq!(out, jar(), "jar must be untouched");
+    }
+
+    #[test]
+    fn merge_expiry_only_refresh_persists_without_cache_reset() {
+        let lines = vec![
+            "SIDCC=old-sidcc; Domain=.youtube.com; Path=/; Secure; Max-Age=31536000".to_string(),
+        ];
+        let (out, changed, dirty) = merge_set_cookies_into_jar(&jar(), &lines, HOST, NOW);
+        assert!(!changed, "same value must not invalidate the header cache");
+        assert!(dirty, "but the fresher expiry should be written");
+        assert!(out.contains(&format!("{}", NOW + 31_536_000)));
     }
 }

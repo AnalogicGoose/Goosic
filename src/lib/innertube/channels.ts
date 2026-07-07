@@ -1,5 +1,11 @@
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { authHeaders, readRuns, DESKTOP_UA, type YtNode } from "./shared";
+import {
+  authHeaders,
+  captureSetCookies,
+  readRuns,
+  DESKTOP_UA,
+  type YtNode,
+} from "./shared";
 
 /**
  * One selectable YouTube identity inside the signed-in Google account:
@@ -46,6 +52,10 @@ export async function fetchChannelList(): Promise<ChannelChoice[]> {
       "Accept-Language": "en-US,en;q=0.9",
     },
   });
+  // This page-level endpoint is the one that mints the post-login
+  // LOGIN_INFO / SIDCC burst; echoing it into the jar is what keeps
+  // the fresh session alive (see captureSetCookies).
+  await captureSetCookies(res);
   if (!res.ok) {
     throw new Error(`account switcher: HTTP ${res.status}`);
   }

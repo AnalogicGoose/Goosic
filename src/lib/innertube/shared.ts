@@ -158,6 +158,60 @@ export function resetAuthCache(): void {
 }
 
 /**
+ * Split a combined `set-cookie` header into individual cookies. Only
+ * used when `Headers.getSetCookie` is unavailable. Commas inside
+ * Expires dates ("Tue, 07 Jul 2027 ...") are followed by a space and a
+ * bare token, never by `name=`, so splitting on a comma followed by a
+ * cookie-name prefix is safe for the values Google sends.
+ */
+export function splitSetCookieHeader(raw: string): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/,(?=\s*[A-Za-z0-9_!#$%&'*+.^`|~-]+=)/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Echo `Set-Cookie` headers from a music.youtube.com response back
+ * into the active account's encrypted jar (via Rust). Google rotates
+ * its session-security cookies (SIDCC / __Secure-*PSIDCC / LOGIN_INFO)
+ * right after sign-in and expects the client to send the fresh values
+ * from then on; a client that keeps replaying the pre-rotation
+ * snapshot matches the stolen-cookie heuristic and the whole session
+ * gets revoked within hours — the v0.2.0 "library and Premium vanish"
+ * bug. The tauri http plugin deliberately exposes `set-cookie` on
+ * response headers, which lets us behave like the browser here.
+ *
+ * Best-effort by design: a failed merge must never fail the data call
+ * that triggered it.
+ */
+export async function captureSetCookies(res: Response): Promise<void> {
+  const lines =
+    typeof res.headers.getSetCookie === "function"
+      ? res.headers.getSetCookie()
+      : splitSetCookieHeader(res.headers.get("set-cookie") ?? "");
+  if (lines.length === 0) return;
+  let host: string;
+  try {
+    host = new URL(res.url).hostname;
+  } catch {
+    return;
+  }
+  try {
+    const changed = await invoke<boolean>("merge_response_cookies", {
+      host,
+      setCookies: lines,
+    });
+    // A rotated value means the cached Cookie header is stale — drop
+    // it so the next request sends what Google just issued.
+    if (changed) resetAuthCache();
+  } catch (e) {
+    console.warn("[auth] failed to merge rotated cookies:", e);
+  }
+}
+
+/**
  * Build the Cookie + SAPISIDHASH auth headers needed to hit
  * authenticated InnerTube endpoints (/browse FEmusic_liked_*, etc.),
  * plus `X-Goog-PageId` when the account acts as a brand channel
@@ -196,6 +250,9 @@ export async function innertubePost(
     headers: { ...BASE_HEADERS, ...visitorHeader, ...auth },
     body: JSON.stringify({ context: buildContext(), ...body }),
   });
+
+  // Before the error bail: Google rotates cookies on 4xx responses too.
+  await captureSetCookies(res);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
