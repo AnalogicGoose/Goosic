@@ -1845,6 +1845,42 @@ struct CacheEntry {
     /// Seconds since unix epoch. Frontend formats for display.
     #[serde(rename = "modifiedSecs")]
     modified_secs: u64,
+    /// Track title, if a sidecar was written when it was cached. The
+    /// library walk is the frontend's fallback; without either, it shows
+    /// the raw videoId.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    /// Display artist string (already joined), if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artist: Option<String>,
+}
+
+/// On-disk sidecar written next to a cached `<id>.webm` as
+/// `<id>.meta.json`. The Rust side stores it verbatim; the frontend
+/// supplies the already-formatted display strings.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TrackMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artist: Option<String>,
+}
+
+/// Best-effort read of a track's metadata sidecar. Any absence or parse
+/// error is treated as "no metadata" — the cache file is still valid
+/// without it.
+async fn read_track_meta(dir: &std::path::Path, video_id: &str) -> TrackMeta {
+    let path = dir.join(format!("{video_id}.meta.json"));
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => serde_json::from_slice::<TrackMeta>(&bytes).unwrap_or(TrackMeta {
+            title: None,
+            artist: None,
+        }),
+        Err(_) => TrackMeta {
+            title: None,
+            artist: None,
+        },
+    }
 }
 
 /// List every finalized track (.webm) currently in the stream cache.
@@ -1876,10 +1912,13 @@ async fn list_cache(app: tauri::AppHandle) -> Result<Vec<CacheEntry>, String> {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        let sidecar = read_track_meta(&dir, video_id).await;
         entries.push(CacheEntry {
             video_id: video_id.to_string(),
             size: meta.len(),
             modified_secs,
+            title: sidecar.title,
+            artist: sidecar.artist,
         });
     }
     Ok(entries)
@@ -1899,21 +1938,27 @@ async fn delete_cache_entries(
     let mut freed: u64 = 0;
 
     let targets: Vec<String> = if video_ids.is_empty() {
-        // "Clear all" — enumerate on the fly.
+        // "Clear all" — enumerate on the fly. Strip whichever suffix a
+        // file carries so orphaned sidecars / stray .part files (whose
+        // .webm is already gone) get swept too, not just live tracks.
         let mut rd = tokio::fs::read_dir(&dir)
             .await
             .map_err(|e| format!("read_dir: {e}"))?;
-        let mut out = Vec::new();
+        let mut out = std::collections::HashSet::new();
         while let Ok(Some(e)) = rd.next_entry().await {
             if let Some(name) = e.file_name().to_str() {
-                if let Some(id) = name.strip_suffix(".webm") {
+                let id = name
+                    .strip_suffix(".webm")
+                    .or_else(|| name.strip_suffix(".meta.json"))
+                    .or_else(|| name.strip_suffix(".part"));
+                if let Some(id) = id {
                     if sanitize_video_id(id) {
-                        out.push(id.to_string());
+                        out.insert(id.to_string());
                     }
                 }
             }
         }
-        out
+        out.into_iter().collect()
     } else {
         video_ids
             .into_iter()
@@ -1929,8 +1974,46 @@ async fn delete_cache_entries(
         let _ = tokio::fs::remove_file(&path).await;
         // Stray .part file from a crashed download, if any.
         let _ = tokio::fs::remove_file(dir.join(format!("{id}.part"))).await;
+        // Metadata sidecar, if one was written.
+        let _ = tokio::fs::remove_file(dir.join(format!("{id}.meta.json"))).await;
     }
     Ok(freed)
+}
+
+/// Persist a cached track's display metadata to `<id>.meta.json` beside
+/// its `.webm`. Called by the frontend when it streams or prefetches a
+/// track into the persistent (Premium) cache — that's the moment it
+/// knows the title/artist, which `list_cache` cannot derive from the
+/// file alone. Idempotent; an empty title is a no-op.
+#[tauri::command]
+async fn set_cache_meta(
+    app: tauri::AppHandle,
+    video_id: String,
+    title: Option<String>,
+    artist: Option<String>,
+) -> Result<(), String> {
+    if !sanitize_video_id(&video_id) {
+        return Err(format!("invalid videoId: {video_id}"));
+    }
+    let title = title.filter(|s| !s.trim().is_empty());
+    // Nothing worth writing — skip rather than leave an empty sidecar.
+    if title.is_none() {
+        return Ok(());
+    }
+    let dir = stream_cache_dir(&app);
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        return Err(format!("create_dir_all: {e}"));
+    }
+    let meta = TrackMeta {
+        title,
+        artist: artist.filter(|s| !s.trim().is_empty()),
+    };
+    let bytes = serde_json::to_vec(&meta).map_err(|e| format!("serialize: {e}"))?;
+    let path = dir.join(format!("{video_id}.meta.json"));
+    tokio::fs::write(&path, bytes)
+        .await
+        .map_err(|e| format!("write: {e}"))?;
+    Ok(())
 }
 
 /// Make the managed yt-dlp binary available (download on first run,
@@ -2864,6 +2947,7 @@ pub fn run() {
             get_active_account_id,
             list_cache,
             delete_cache_entries,
+            set_cache_meta,
             cache_cover,
             cover_cache_stats,
             clear_cover_cache,

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { listen } from "@tauri-apps/api/event";
 import { fetchRadio } from "@/lib/innertube/radio";
-import { prefetchStream, streamUrlFor } from "@/lib/stream";
+import { prefetchStream, saveTrackMeta, streamUrlFor } from "@/lib/stream";
 import { usePlaybackStore, type QueueTrack } from "@/lib/store/playback";
 import { usePremiumStore } from "@/lib/store/premium";
 import { openPremiumGate } from "@/lib/store/premium-gate";
@@ -178,6 +178,18 @@ export function useAudioEngine() {
 
     const token = ++resolveTokenRef.current;
     usePlaybackStore.getState().setStatus("loading");
+
+    // Persist this track's title/artist beside its cache file so the
+    // Storage tab can name it without depending on the library walk.
+    // Read from the store imperatively (like the rest of this effect) so
+    // the track object doesn't have to join the dependency array.
+    {
+      const st = usePlaybackStore.getState();
+      void saveTrackMeta(
+        streamVideoId,
+        st.index >= 0 ? st.queue[st.index] : undefined,
+      );
+    }
 
     // Playback goes through our local streaming HTTP server. It spawns
     // yt-dlp and pipes the audio bytes progressively so playback starts
@@ -397,6 +409,14 @@ export function useAudioEngine() {
     if (status !== "ready") return;
     if (!nextStreamVideoId) return;
     void prefetchStream(nextStreamVideoId);
+    // Label the prefetched file too — same reasoning as the play path.
+    const st = usePlaybackStore.getState();
+    void saveTrackMeta(
+      nextStreamVideoId,
+      st.index >= 0 && st.index + 1 < st.queue.length
+        ? st.queue[st.index + 1]
+        : undefined,
+    );
   }, [status, nextStreamVideoId]);
 
   // Auto-extend the queue with radio tracks when we're near the end, so
