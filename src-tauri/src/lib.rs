@@ -230,6 +230,16 @@ fn account_webview_dir(app: &tauri::AppHandle, id: &str) -> PathBuf {
 const YT_LOGIN_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 
+/// WebView2 browser args shared by the login window and the session-keeper.
+/// Both open the same per-account profile directory, and WebView2 requires
+/// every instance on a shared user-data folder to pass identical args, so
+/// these have to match. They also stop both windows from grabbing the
+/// hardware media keys or running a media session (which would hijack
+/// play/pause from the real player), and block autoplay so a hidden keeper
+/// never starts making sound on its own.
+const YT_WEBVIEW_ARGS: &str = "--disable-features=HardwareMediaKeyHandling,MediaSessionService \
+     --autoplay-policy=user-gesture-required";
+
 /// Legacy single-account path — kept only for migration. New code
 /// should resolve cookies via `active_cookies_path`.
 fn legacy_cookies_enc_path(app: &tauri::AppHandle) -> PathBuf {
@@ -759,17 +769,19 @@ async fn start_login(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let win = WebviewWindowBuilder::new(&app, "login", WebviewUrl::External(url))
-        .title("Sign in — accounts.google.com")
+        .title("Sign in - accounts.google.com")
         .inner_size(500.0, 720.0)
         .min_inner_size(420.0, 560.0)
         .center()
         .data_directory(webview_data.clone())
         .user_agent(YT_LOGIN_UA)
+        // Must match the session-keeper's args (shared profile folder).
+        .additional_browser_args(YT_WEBVIEW_ARGS)
         // Surface the current origin in the title so the user can spot
         // a redirect to an unexpected host (anti-phishing).
         .on_page_load(|win, payload| {
             let host = payload.url().host_str().unwrap_or("???");
-            let _ = win.set_title(&format!("Sign in — {host}"));
+            let _ = win.set_title(&format!("Sign in - {host}"));
         })
         .build()
         .map_err(|e| e.to_string())?;
@@ -978,20 +990,30 @@ async fn ensure_session_keeper(
     let url = "https://music.youtube.com/"
         .parse::<tauri::Url>()
         .map_err(|e| e.to_string())?;
-    // Hidden, focus-less, off-screen, no taskbar entry. Because it is built
-    // once and reused (not re-created every cycle), there is no recurring
-    // window creation to flash on screen. The webview still loads and keeps
-    // the session alive regardless of visibility or position.
+    // Hidden, undecorated, focus-less, off-screen, no taskbar entry. Built
+    // once and reused (not re-created every cycle), so there is no recurring
+    // window creation to flash on screen; the window-state plugin is told to
+    // never restore keeper windows (see `with_filter` in `run`), so a saved
+    // "visible" state can't drag it back on-screen next launch either. The
+    // webview still loads and keeps the session alive regardless of
+    // visibility or position.
     let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
+        .title("YTubic session keeper")
         .visible(false)
+        .decorations(false)
         .focused(false)
         .skip_taskbar(true)
         .position(-32000.0, -32000.0)
         .inner_size(1024.0, 768.0)
         .data_directory(account_webview_dir(app, id))
         .user_agent(YT_LOGIN_UA)
+        .additional_browser_args(YT_WEBVIEW_ARGS)
         .build()
         .map_err(|e| format!("build session-keeper: {e}"))?;
+    // Force-hide on top of visible(false): if WebView2 shows the host window
+    // when the external page finishes loading, this puts it straight back to
+    // hidden so the user never sees a stray music.youtube.com window.
+    let _ = win.hide();
     Ok((win, true))
 }
 
@@ -2910,6 +2932,13 @@ pub fn run() {
                     tauri_plugin_window_state::StateFlags::all()
                         & !tauri_plugin_window_state::StateFlags::DECORATIONS,
                 )
+                // Never persist or restore the hidden session-keeper windows.
+                // Their saved "visible: true" + on-screen position was being
+                // replayed on the next launch, popping a stray
+                // music.youtube.com window into view until the user minimized
+                // it. Keeping them out of the store lets their builder flags
+                // (hidden, off-screen) hold on every launch.
+                .with_filter(|label| !label.starts_with("keeper-"))
                 .build(),
         )
         .plugin(tauri_plugin_store::Builder::new().build())
