@@ -228,6 +228,13 @@ export function ProgressSlider({
     setHoverTime(Math.round(scrub));
   }, [scrub, duration]);
 
+  // Guard against a transient state where the track's duration has reset to 0
+  // (e.g. re-selecting the already-playing track) while `position` still holds
+  // the previous time. Without clamping, `value > max` makes Radix push the
+  // slider thumb past the track's right edge, clipping outside the window.
+  const max = Math.max(duration, 1);
+  const value = Math.min(Math.max(scrub ?? position, 0), max);
+
   return (
     <div
       ref={wrapperRef}
@@ -257,8 +264,8 @@ export function ProgressSlider({
         </div>
       ) : null}
       <Slider
-        value={[scrub ?? position]}
-        max={Math.max(duration, 1)}
+        value={[value]}
+        max={max}
         step={1}
         disabled={disabled}
         onValueChange={([v]) => setScrub(v)}

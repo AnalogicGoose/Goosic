@@ -65,9 +65,37 @@ export function useAudioEngine() {
     const onTimeUpdate = () => {
       store().setPosition(el.currentTime);
     };
-    const onDurationChange = () => {
+    const syncDuration = () => {
+      // A real, finite element duration is authoritative — always take it.
       if (Number.isFinite(el.duration) && el.duration > 0) {
         store().setDuration(el.duration);
+        return;
+      }
+      // Below here we're only filling in an estimate for streams that never
+      // report a finite duration. Once one is set, don't re-run the
+      // fallbacks (this handler also fires on every `progress` event).
+      if (store().duration > 0) return;
+      // YouTube audio streams are frequently served as an unbounded /
+      // chunked source, so the media element reports `Infinity` (or NaN)
+      // for its duration and `durationchange` never yields a real length.
+      // Fall back to the track's own duration from the browse/InnerTube
+      // metadata so the progress bar has a proper max instead of pinning
+      // the thumb to the far right (see ProgressSlider clamp).
+      const s = store();
+      const cur = s.index >= 0 ? s.queue[s.index] : undefined;
+      if (cur?.duration && cur.duration > 0) {
+        store().setDuration(cur.duration);
+        return;
+      }
+      // Last resort for tracks whose browse card carried no length (e.g.
+      // some home-page shelves): once the stream has buffered, the
+      // element's seekable range end reflects the true track length even
+      // while `duration` stays Infinity.
+      if (el.seekable.length > 0) {
+        const end = el.seekable.end(el.seekable.length - 1);
+        if (Number.isFinite(end) && end > 0) {
+          store().setDuration(end);
+        }
       }
     };
     const onEnded = () => {
@@ -140,14 +168,21 @@ export function useAudioEngine() {
     };
 
     el.addEventListener("timeupdate", onTimeUpdate);
-    el.addEventListener("durationchange", onDurationChange);
+    // `durationchange` fires with the (often Infinity) stream duration;
+    // `loadedmetadata` and `progress` re-run the fallbacks as the seekable
+    // range fills in for streams that never report a finite duration.
+    el.addEventListener("durationchange", syncDuration);
+    el.addEventListener("loadedmetadata", syncDuration);
+    el.addEventListener("progress", syncDuration);
     el.addEventListener("ended", onEnded);
     el.addEventListener("error", onError);
     el.addEventListener("playing", onPlaying);
     el.addEventListener("waiting", onWaiting);
     return () => {
       el.removeEventListener("timeupdate", onTimeUpdate);
-      el.removeEventListener("durationchange", onDurationChange);
+      el.removeEventListener("durationchange", syncDuration);
+      el.removeEventListener("loadedmetadata", syncDuration);
+      el.removeEventListener("progress", syncDuration);
       el.removeEventListener("ended", onEnded);
       el.removeEventListener("error", onError);
       el.removeEventListener("playing", onPlaying);

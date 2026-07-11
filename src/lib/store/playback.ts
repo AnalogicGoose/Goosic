@@ -125,6 +125,29 @@ const playbackStateCreator: StateCreator<PlaybackState> = (set, get) => ({
   playNow: (track, extras) => {
     const mapped = shelfItemToTrack(track);
     if (!mapped) return;
+    // Re-clicking the track that's already current shouldn't tear down and
+    // re-resolve the stream — that round-trip resets duration to 0 and made
+    // the progress bar glitch. Treat it as "restart from the beginning": a
+    // pure seek to 0, keeping the resolved stream and duration intact.
+    const { queue: curQueue, index: curIndex, status, streamUrl } = get();
+    const current = curIndex >= 0 ? curQueue[curIndex] : undefined;
+    if (
+      current?.videoId === mapped.videoId &&
+      status !== "error" &&
+      streamUrl
+    ) {
+      // The stream is already resolved (streamUrl set), so clear any
+      // lingering "loading" status here — a seek-to-0 on an element that's
+      // already playing fires no `playing` event to flip status via onPlaying.
+      set({
+        position: 0,
+        pendingSeek: 0,
+        playing: true,
+        status: "ready",
+        error: undefined,
+      });
+      return;
+    }
     let queue = extras?.length
       ? [mapped, ...extras.filter((t) => t.videoId !== mapped.videoId)]
       : [mapped];
