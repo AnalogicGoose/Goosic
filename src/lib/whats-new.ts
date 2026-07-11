@@ -38,6 +38,33 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.3.0",
+    date: "July 2026",
+    sections: [
+      {
+        heading: "Discord Rich Presence",
+        items: [
+          "Show what you're listening to on your Discord profile, complete with album art and a progress bar.",
+          "Turn it on in Settings under the new Integrations tab.",
+        ],
+      },
+      {
+        heading: "Last.fm scrobbling",
+        items: [
+          "Connect your Last.fm account to scrobble every track you play.",
+          "Liking a song on YTubic loves it on Last.fm, and unliking removes it.",
+          "Scrobbles made while offline are queued and sent once you're back online.",
+        ],
+      },
+      {
+        heading: "Fixes",
+        items: [
+          "Fixed the floating mini player failing to open after the 0.2.2 update.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.2.2",
     date: "July 2026",
     sections: [
