@@ -14,7 +14,8 @@ fn inject_lastfm_credentials() {
     println!("cargo:rerun-if-changed=lastfm_config.json");
 
     let mut key = clean_credential(std::env::var("YTUBIC_LASTFM_API_KEY").unwrap_or_default());
-    let mut secret = clean_credential(std::env::var("YTUBIC_LASTFM_API_SECRET").unwrap_or_default());
+    let mut secret =
+        clean_credential(std::env::var("YTUBIC_LASTFM_API_SECRET").unwrap_or_default());
 
     if key.is_empty() || secret.is_empty() {
         if let Ok(raw) = std::fs::read_to_string("lastfm_config.json") {

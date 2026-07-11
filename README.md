@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="../../releases/latest">
+  <a href="https://github.com/AnalogicGoose/YTubic/releases/latest">
     <img src="https://img.shields.io/badge/%E2%AC%87%20Download%20for%20Windows-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="Download for Windows" height="60" />
   </a>
 </p>
@@ -41,7 +41,7 @@ Built as a reaction to the sluggish webview-wrapper experience — YTubic talks 
 
 ## Install
 
-Download the latest installer from the [Releases](../../releases) page and run it.
+Download the latest installer from the [Releases](https://github.com/AnalogicGoose/YTubic/releases) page and run it.
 
 - **Windows 10/11 only** for now.
 - On first launch the app downloads its own copy of yt-dlp (~12 MB) into its

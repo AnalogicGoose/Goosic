@@ -297,7 +297,7 @@ function ThemeSubMenu() {
   );
 }
 
-const REPO_ISSUES_URL = "https://github.com/NUber-dev/YTubic/issues/new";
+const REPO_ISSUES_URL = "https://github.com/AnalogicGoose/YTubic/issues/new";
 
 /**
  * Feedback form that hands off to GitHub: Submit opens a prefilled
@@ -354,9 +354,9 @@ function ReportIssueDialog({
         <DialogHeader>
           <DialogTitle>Report an issue</DialogTitle>
           <DialogDescription>
-            Tell us what went wrong or what you'd like to see. Submitting
-            opens a prefilled GitHub issue in your browser — app version
-            and OS are attached automatically.
+            Tell us what went wrong or what you'd like to see. Submitting opens
+            a prefilled GitHub issue in your browser — app version and OS are
+            attached automatically.
           </DialogDescription>
         </DialogHeader>
 
@@ -445,11 +445,7 @@ function RestoreGlyph() {
 function CloseGlyph() {
   return (
     <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
-      <path
-        d="M0 0 L10 10 M10 0 L0 10"
-        stroke="currentColor"
-        strokeWidth="1"
-      />
+      <path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" strokeWidth="1" />
     </svg>
   );
 }

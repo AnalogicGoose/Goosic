@@ -86,7 +86,7 @@ function StatCard({
   value: string;
 }) {
   return (
-    <div className="flex flex-col gap-1 rounded-[10px] border bg-background p-4 shadow-xs dark:border-input dark:bg-input/30">
+    <div className="flex flex-col gap-1 rounded-[34px] border bg-background p-4 shadow-xs dark:border-input dark:bg-input/30">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Icon className="size-3.5 text-foreground" />
         {label}

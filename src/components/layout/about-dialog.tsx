@@ -12,11 +12,15 @@ import { Button } from "@/components/ui/button";
 import { checkForUpdates } from "@/lib/updater";
 import { openWhatsNew } from "@/lib/store/whats-new";
 
-const REPO_URL = "https://github.com/NUber-dev/YTubic";
+const REPO_URL = "https://github.com/AnalogicGoose/YTubic";
 const KOFI_URL = "https://ko-fi.com/nuberr";
 
 const CREDITS: { name: string; role: string; url: string }[] = [
-  { name: "yt-dlp", role: "audio streaming", url: "https://github.com/yt-dlp/yt-dlp" },
+  {
+    name: "yt-dlp",
+    role: "audio streaming",
+    url: "https://github.com/yt-dlp/yt-dlp",
+  },
   { name: "LRCLIB", role: "synced lyrics", url: "https://lrclib.net" },
   { name: "Musixmatch", role: "lyrics", url: "https://www.musixmatch.com" },
   { name: "Genius", role: "lyrics", url: "https://genius.com" },

@@ -39,13 +39,16 @@ export function getStreamBaseUrl(): Promise<string> {
   return baseUrlPromise;
 }
 
-function ephemeralSuffix(): string {
-  return isPremium() ? "" : "?ephemeral=1";
-}
-
-export async function streamUrlFor(videoId: string): Promise<string> {
+export async function streamUrlFor(
+  videoId: string,
+  options?: { refresh?: boolean },
+): Promise<string> {
   const base = await getStreamBaseUrl();
-  return `${base}/stream/${encodeURIComponent(videoId)}${ephemeralSuffix()}`;
+  const params = new URLSearchParams();
+  if (!isPremium()) params.set("ephemeral", "1");
+  if (options?.refresh) params.set("refresh", "1");
+  const query = params.size ? `?${params}` : "";
+  return `${base}/stream/${encodeURIComponent(videoId)}${query}`;
 }
 
 const prefetched = new Set<string>();

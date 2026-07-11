@@ -34,8 +34,12 @@ fn diagnose(name: &str, v: &str) {
 async fn main() {
     // Prefer the consts baked in by build.rs (exactly what a release binary
     // uses); fall back to the local config for ad-hoc runs.
-    let mut key = option_env!("YTUBIC_LASTFM_API_KEY").unwrap_or("").to_string();
-    let mut secret = option_env!("YTUBIC_LASTFM_API_SECRET").unwrap_or("").to_string();
+    let mut key = option_env!("YTUBIC_LASTFM_API_KEY")
+        .unwrap_or("")
+        .to_string();
+    let mut secret = option_env!("YTUBIC_LASTFM_API_SECRET")
+        .unwrap_or("")
+        .to_string();
     if key.is_empty() || secret.is_empty() {
         let raw = std::fs::read_to_string("lastfm_config.json").expect("lastfm_config.json");
         key = json_string_field(&raw, "api_key").expect("api_key");
@@ -46,7 +50,10 @@ async fn main() {
     }
     diagnose("api_key", &key);
     diagnose("api_secret", &secret);
-    let runs: usize = std::env::args().nth(1).and_then(|a| a.parse().ok()).unwrap_or(3);
+    let runs: usize = std::env::args()
+        .nth(1)
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(3);
 
     let client = reqwest::Client::new();
     for i in 1..=runs {
@@ -66,7 +73,10 @@ async fn main() {
             Ok(r) => {
                 let status = r.status();
                 let version = format!("{:?}", r.version());
-                let body = r.text().await.unwrap_or_else(|e| format!("<read error: {e}>"));
+                let body = r
+                    .text()
+                    .await
+                    .unwrap_or_else(|e| format!("<read error: {e}>"));
                 println!("run {i}: {status} {version} {body}");
             }
             Err(e) => println!("run {i}: network error: {e}"),

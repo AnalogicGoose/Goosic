@@ -107,162 +107,158 @@ export function PlayerBarBottom() {
     // adjacent triggers (Radix's 300ms default makes the next one
     // pop up instantly otherwise).
     <TooltipProvider delayDuration={800} skipDelayDuration={0}>
-    <aside
-      className="relative z-10 mr-2 mb-2 flex shrink-0 flex-col gap-2 rounded-[10px] border border-sidebar-border bg-surface px-4 py-3 shadow-sm"
-    >
-      {status === "error" && error ? (
-        <div className="absolute -top-9 left-3 right-3 truncate rounded-md bg-destructive/90 px-3 py-1 text-xs text-destructive-foreground shadow">
-          Playback error: {error}
-        </div>
-      ) : null}
+      <aside className="relative z-10 mr-2 mb-2 flex shrink-0 flex-col gap-2 rounded-[34px] border border-sidebar-border bg-surface px-4 py-3 shadow-sm">
+        {status === "error" && error ? (
+          <div className="absolute -top-9 left-3 right-3 truncate rounded-md bg-destructive/90 px-3 py-1 text-xs text-destructive-foreground shadow">
+            Playback error: {error}
+          </div>
+        ) : null}
 
-      {/* Top row — three sections separated by `flex-1` wings so the
+        {/* Top row — three sections separated by `flex-1` wings so the
           transport cluster always lands centered in the bar. */}
-      <div className="flex items-center gap-4">
-        {/* LEFT wing: cover + meta. `min-w-0` lets the title truncate
+        <div className="flex items-center gap-4">
+          {/* LEFT wing: cover + meta. `min-w-0` lets the title truncate
             instead of pushing the transport cluster off-center. */}
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <div
-            onPointerDown={onCoverPointerDown}
-            className="shrink-0 touch-none select-none cursor-grab active:cursor-grabbing"
-          >
-            {track ? (
-              <Thumbnail
-                thumbnails={track.thumbnails}
-                alt={track.title}
-                className="size-14 shrink-0 rounded-md border border-hairline pointer-events-none"
-                targetSize={256}
-                highRes
-                overrideHighRes={iTunesCover}
-              />
-            ) : (
-              <div className="size-14 shrink-0 rounded-md border border-hairline bg-muted" />
-            )}
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="truncate text-base font-semibold leading-tight">
-              {track?.title ?? "Nothing playing"}
-            </span>
-            {track ? (
-              <ArtistLinks
-                artists={track.artists}
-                fallback={track.subtitle ?? ""}
-                className="truncate text-sm text-muted-foreground leading-tight"
-              />
-            ) : (
-              <span className="truncate text-sm text-muted-foreground leading-tight">
-                Pick a track to start
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div
+              onPointerDown={onCoverPointerDown}
+              className="shrink-0 touch-none select-none cursor-grab active:cursor-grabbing"
+            >
+              {track ? (
+                <Thumbnail
+                  thumbnails={track.thumbnails}
+                  alt={track.title}
+                  className="size-14 shrink-0 rounded-md border border-hairline pointer-events-none"
+                  targetSize={256}
+                  highRes
+                  overrideHighRes={iTunesCover}
+                />
+              ) : (
+                <div className="size-14 shrink-0 rounded-md border border-hairline bg-muted" />
+              )}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="truncate text-base font-semibold leading-tight">
+                {track?.title ?? "Nothing playing"}
               </span>
-            )}
+              {track ? (
+                <ArtistLinks
+                  artists={track.artists}
+                  fallback={track.subtitle ?? ""}
+                  className="truncate text-sm text-muted-foreground leading-tight"
+                />
+              ) : (
+                <span className="truncate text-sm text-muted-foreground leading-tight">
+                  Pick a track to start
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* CENTER: shuffle | prev | PLAY | next | repeat. Width is
+            implicit (no flex-1) so the wings push it to the middle. */}
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Shuffle"
+              aria-pressed={shuffle}
+              onClick={() => setShuffle(!shuffle)}
+              className={cn(shuffle && "text-brand")}
+            >
+              <ShuffleIcon />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Previous"
+              onClick={prev}
+              disabled={!hasTrack}
+            >
+              <SkipBackIcon className="fill-current" />
+            </Button>
+            <Button
+              size="icon"
+              aria-label={playing ? "Pause" : "Play"}
+              onClick={toggle}
+              disabled={!hasTrack}
+              className="size-12 rounded-full bg-brand text-white hover:bg-brand/90"
+            >
+              {loading ? (
+                <Loader2Icon className="animate-spin" />
+              ) : playing ? (
+                <PauseIcon className="size-5 fill-current" />
+              ) : (
+                <PlayIcon className="size-5 fill-current" />
+              )}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Next"
+              onClick={next}
+              disabled={!hasTrack}
+            >
+              <SkipForwardIcon className="fill-current" />
+            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={repeatLabel(repeat)}
+                  aria-pressed={repeat !== "off"}
+                  onClick={cycleRepeat}
+                  className={cn(repeat !== "off" && "text-brand")}
+                >
+                  {repeat === "one" ? <Repeat1Icon /> : <RepeatIcon />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{repeatLabel(repeat)}</TooltipContent>
+            </Tooltip>
+          </div>
+
+          {/* RIGHT wing: secondary actions, justified to the right edge. */}
+          <div className="flex flex-1 items-center justify-end gap-0.5">
+            {track ? (
+              <LikeDislikeButtons videoId={track.videoId} track={track} />
+            ) : null}
+            <LyricsPopover state={lyricsState} />
+            <QueuePopover />
+            <VolumeControl direction="vertical" />
+            <PlayerMoreMenu track={track} />
           </div>
         </div>
 
-        {/* CENTER: shuffle | prev | PLAY | next | repeat. Width is
-            implicit (no flex-1) so the wings push it to the middle. */}
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Shuffle"
-            aria-pressed={shuffle}
-            onClick={() => setShuffle(!shuffle)}
-            className={cn(shuffle && "text-brand")}
-          >
-            <ShuffleIcon />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Previous"
-            onClick={prev}
-            disabled={!hasTrack}
-          >
-            <SkipBackIcon className="fill-current" />
-          </Button>
-          <Button
-            size="icon"
-            aria-label={playing ? "Pause" : "Play"}
-            onClick={toggle}
-            disabled={!hasTrack}
-            className="size-12 rounded-full bg-brand text-white hover:bg-brand/90"
-          >
-            {loading ? (
-              <Loader2Icon className="animate-spin" />
-            ) : playing ? (
-              <PauseIcon className="size-5 fill-current" />
-            ) : (
-              <PlayIcon className="size-5 fill-current" />
-            )}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Next"
-            onClick={next}
-            disabled={!hasTrack}
-          >
-            <SkipForwardIcon className="fill-current" />
-          </Button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={repeatLabel(repeat)}
-                aria-pressed={repeat !== "off"}
-                onClick={cycleRepeat}
-                className={cn(repeat !== "off" && "text-brand")}
-              >
-                {repeat === "one" ? <Repeat1Icon /> : <RepeatIcon />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{repeatLabel(repeat)}</TooltipContent>
-          </Tooltip>
-        </div>
-
-        {/* RIGHT wing: secondary actions, justified to the right edge. */}
-        <div className="flex flex-1 items-center justify-end gap-0.5">
-          {track ? <LikeDislikeButtons videoId={track.videoId} track={track} /> : null}
-          <LyricsPopover state={lyricsState} />
-          <QueuePopover />
-          <VolumeControl direction="vertical" />
-          <PlayerMoreMenu track={track} />
-        </div>
-      </div>
-
-      {/* Progress row — times sit at the bar's edges (intrinsic
+        {/* Progress row — times sit at the bar's edges (intrinsic
           widths, no padding inside their boxes) so the LEFT time
           starts exactly under cover-left and the RIGHT time ends
           exactly under more-right. The slider fills whatever's left
           between them. */}
-      <div className="flex items-center gap-2">
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-          {formatTime(scrub ?? position)}
-        </span>
-        <div className="min-w-0 flex-1">
-          <ProgressSlider
-            position={position}
-            duration={duration}
-            scrub={scrub}
-            setScrub={setScrub}
-            seek={seek}
-            disabled={!hasTrack || duration <= 0}
-          />
+        <div className="flex items-center gap-2">
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {formatTime(scrub ?? position)}
+          </span>
+          <div className="min-w-0 flex-1">
+            <ProgressSlider
+              position={position}
+              duration={duration}
+              scrub={scrub}
+              setScrub={setScrub}
+              seek={seek}
+              disabled={!hasTrack || duration <= 0}
+            />
+          </div>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {formatTime(duration)}
+          </span>
         </div>
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-          {formatTime(duration)}
-        </span>
-      </div>
-    </aside>
+      </aside>
     </TooltipProvider>
   );
 }
 
-function LyricsPopover({
-  state,
-}: {
-  state: ReturnType<typeof useLyricsView>;
-}) {
+function LyricsPopover({ state }: { state: ReturnType<typeof useLyricsView> }) {
   if (!state.hasTrack) {
     return (
       <Button variant="ghost" size="icon" disabled aria-label="Lyrics">
@@ -299,4 +295,3 @@ function LyricsPopover({
     </Popover>
   );
 }
-

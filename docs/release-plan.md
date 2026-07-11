@@ -21,16 +21,17 @@ How it works today (and this is a good design):
 
 Realistic risks:
 
-| Risk | Likelihood | Consequence |
-|---|---|---|
-| Google account ban for usage | Very low — no known precedents with third-party players (ytmdesktop, FreeTube, etc.) | — |
-| Streaming breakage (YouTube changes the protocol: PO tokens, SABR) | High, recurring | Playability drops until a new yt-dlp version ships |
-| IP rate-limit / temporary 403s during active listening | Low-medium | Temporary playback errors |
-| Formal YouTube ToS violation | Yes, formally a violation (third-party client, ad bypass) | Risk to the project (DMCA/repo takedown), not to users |
+| Risk                                                               | Likelihood                                                                           | Consequence                                            |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| Google account ban for usage                                       | Very low — no known precedents with third-party players (ytmdesktop, FreeTube, etc.) | —                                                      |
+| Streaming breakage (YouTube changes the protocol: PO tokens, SABR) | High, recurring                                                                      | Playability drops until a new yt-dlp version ships     |
+| IP rate-limit / temporary 403s during active listening             | Low-medium                                                                           | Temporary playback errors                              |
+| Formal YouTube ToS violation                                       | Yes, formally a violation (third-party client, ad bypass)                            | Risk to the project (DMCA/repo takedown), not to users |
 
 Conclusions for the release:
-- In the README and About — a disclaimer: *"Unofficial client. Not affiliated with Google/YouTube.
-  Use at your own risk"*.
+
+- In the README and About — a disclaimer: _"Unofficial client. Not affiliated with Google/YouTube.
+  Use at your own risk"_.
 - **yt-dlp must be updatable** without rebuilding the app (see question 2) — this is the
   main safeguard against breakage.
 - Don't add any "aggressive" activity (mass likes, scraping) — the current request
@@ -50,11 +51,13 @@ Found **one hard binding — a release blocker**:
   must be verified on a clean VM.
 
 What was checked and has NO binding:
+
 - Cookies — only the user's own login (DPAPI encryption, AppData).
 - visitorData / Musixmatch token — obtained at runtime, nothing hardcoded.
 - No personal API keys in the code.
 
 Other compatibility factors:
+
 - **WebView2** — almost always present on Win10/11; in the bundle config enable
   `webviewInstallMode: downloadBootstrapper` just in case.
 - **Windows only**: DPAPI, SMTC, windows-sys — no cross-platform support. Declare the
@@ -67,6 +70,7 @@ Other compatibility factors:
 ### 3. Login and plan detection
 
 How it works:
+
 1. **Login** (`start_login` in lib.rs): a separate WebView window opens with the real
    accounts.google.com page (a fresh profile per attempt); after a successful sign-in the
    cookies are taken from the webview, encrypted with DPAPI and stored in
@@ -77,6 +81,7 @@ How it works:
    fallback to premium + manual override in settings.
 
 What is actually gated by plan (see `premium.ts`, stream-server):
+
 - Premium → persistent on-disk track cache + prefetch.
 - Free → ephemeral cache (wiped on every launch), no prefetch.
 
@@ -85,6 +90,7 @@ What is actually gated by plan (see `premium.ts`, stream-server):
 streams are anonymous, Google itself doesn't push ads into this channel. What we control
 and already do right: a free user **does not accumulate an offline library** (that's the
 Premium "downloads" feature). Before release:
+
 - Run detection on a free account and a premium account, on en and ru locales.
 - Make sure a new user without login has everything working in anonymous mode
   (home, search, playback) — this will be the most common first launch.
@@ -102,7 +108,7 @@ Premium "downloads" feature). Before release:
    A custom icon is needed. The name `ytm-native` is acceptable (an abbreviation), but
    don't use "YouTube Music" in the product name.
 4. Creating the repository (via github.com → New repository, or `gh repo create
-   ytm-native --public --source . --push`). Description, topics (tauri, youtube-music,
+ytm-native --public --source . --push`). Description, topics (tauri, youtube-music,
    desktop), screenshots in the README.
 5. **GitHub Actions**: a `tauri-action` workflow — builds the NSIS installer on a
    `v*` tag, publishes a draft release with the artifacts. Updater signing secrets (see #5) —
@@ -149,12 +155,12 @@ The "About" item is currently a disabled placeholder. Build a dialog or page wit
 
 Currently a placeholder dialog (the form goes nowhere). Options:
 
-| Option | Voting | Cost | Infrastructure |
-|---|---|---|---|
-| **GitHub Issues + Discussions** | 👍 reactions, sort by them | 0 | none |
-| Canny (like Raycast-style apps) | yes, full-featured | free tier very stingy, then $79+/mo | none |
-| Fider (self-hosted, OSS) | yes | hosting ~$5/mo | own server |
-| Featurebase / Sleekplan / Nolt | yes | free tier limited | none |
+| Option                          | Voting                     | Cost                                | Infrastructure |
+| ------------------------------- | -------------------------- | ----------------------------------- | -------------- |
+| **GitHub Issues + Discussions** | 👍 reactions, sort by them | 0                                   | none           |
+| Canny (like Raycast-style apps) | yes, full-featured         | free tier very stingy, then $79+/mo | none           |
+| Fider (self-hosted, OSS)        | yes                        | hosting ~$5/mo                      | own server     |
+| Featurebase / Sleekplan / Nolt  | yes                        | free tier limited                   | none           |
 
 **Recommendation for the start: GitHub Issues + Discussions.** Zero cost, users
 vote 👍, the developer replies, everything lives next to the code. Rework the "Report Issue"
@@ -169,6 +175,7 @@ problem, add Fider/Canny later and just change the button's URL.
 ## Phased work plan
 
 ### Phase 0 — blockers (can't release without these)
+
 - [x] yt-dlp: download on first launch into AppData + periodic auto-update;
       remove the PATH dependency — **done 2026-07-05**: module
       `src-tauri/src/ytdlp.rs` (managed copy in `<app-data>/bin/`, download from
@@ -189,7 +196,8 @@ problem, add Fider/Canny later and just change the button's URL.
       playback (free and premium accounts)
 
 ### Phase 1 — GitHub
-- [x] Public repository created and pushed — **https://github.com/NUber-dev/YTubic**
+
+- [x] Public repository created and pushed — **https://github.com/AnalogicGoose/YTubic**
       (2026-07-05); Discussions enabled, topics added; gh CLI installed and
       authorized
 - [ ] README: app screenshots (the rest — installation, FAQ — already done)
@@ -199,25 +207,28 @@ problem, add Fider/Canny later and just change the button's URL.
       a `v*` tag); the `TAURI_SIGNING_PRIVATE_KEY` secret uploaded to the repo
 
 ### Phase 2 — updates
+
 - [x] tauri-plugin-updater + tauri-plugin-process; keys: private —
       `C:\Users\ivasy\.tauri\ytubic.key` (**keep safe!**, copy in GitHub Secrets),
       public embedded in tauri.conf.json; endpoint —
-      `NUber-dev/YTubic/releases/latest/download/latest.json`; targets → ["nsis"],
+      `AnalogicGoose/YTubic/releases/latest/download/latest.json`; targets → ["nsis"],
       createUpdaterArtifacts on
 - [x] "Check for Updates" button + silent check on startup (src/lib/updater.ts):
       toasts, download progress, Restart now; disabled in dev mode
 - [ ] Verify the v0.1.0 → v0.1.1 chain on a real install
 
 ### Phase 3 — About and Report Issue
+
 - [x] About dialog (`src/components/layout/about-dialog.tsx`): version, credits
       (yt-dlp, LRCLIB, Musixmatch, Genius, Tauri, shadcn, TanStack), disclaimer,
       GPL link, GitHub / Check for updates buttons. The last "Soon" menu item
       was removed
 - [x] Report Issue → pre-filled GitHub issue with diagnostics (version, OS) —
-      opens `NUber-dev/YTubic/issues/new` via plugin-opener
+      opens `AnalogicGoose/YTubic/issues/new` via plugin-opener
 - [ ] (opt.) Third-party licenses screen
 
 ### Phase 4 — v0.1.0 release
+
 - [x] Tag v0.1.0 → release.yml built a **draft release** (2026-07-05, 8m55s):
       `YTubic_0.1.0_x64-setup.exe` + `.sig` + `latest.json` — the whole
       signing/updater pipeline works
@@ -228,6 +239,7 @@ problem, add Fider/Canny later and just change the button's URL.
 - [ ] Post-release issue monitoring; a quick-patch plan in case yt-dlp breaks
 
 ### Deferred / post-release
+
 - Code signing (Azure Trusted Signing) — once SmartScreen complaints appear
 - Fider/Canny for feedback — if a GitHub account turns out to be a barrier
 - macOS/Linux — will require replacing the DPAPI and SMTC layers

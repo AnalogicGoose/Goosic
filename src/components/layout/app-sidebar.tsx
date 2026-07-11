@@ -92,25 +92,20 @@ export function AppSidebar() {
   const { location } = useRouterState();
 
   const isOn = (to: string) => location.pathname === to;
-  const isPlaylistOn = (id: string) =>
-    location.pathname === `/playlist/${id}`;
+  const isPlaylistOn = (id: string) => location.pathname === `/playlist/${id}`;
 
   return (
     <Sidebar
       variant="floating"
       collapsible="icon"
-      className="px-2 pb-2 pt-0 duration-300 ease-out [&>[data-slot=sidebar-inner]]:rounded-[10px] [&>[data-slot=sidebar-inner]]:bg-surface [&>[data-slot=sidebar-inner]]:shadow-none"
+      className="px-2 pb-2 pt-0 duration-300 ease-out [&>[data-slot=sidebar-inner]]:rounded-[34px] [&>[data-slot=sidebar-inner]]:bg-surface [&>[data-slot=sidebar-inner]]:shadow-none"
     >
       <SidebarHeader className="flex-row items-center gap-2 px-4 pt-[18px] pb-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2">
         {/* Single round logo. In expanded mode it sits at px-4 to line
          *  up with menu icons (which are at group-p-2 + button-p-2 =
          *  16px). In collapsed mode the row centers it like the
          *  centered menu icons below. */}
-        <img
-          src="/ytubic-icon.svg"
-          alt="YTubic"
-          className="size-7 shrink-0"
-        />
+        <img src="/ytubic-icon.svg" alt="YTubic" className="size-7 shrink-0" />
         <span className="text-xl font-semibold leading-none tracking-tight transition-opacity duration-200 group-data-[collapsible=icon]:hidden">
           YTubic
         </span>
@@ -268,7 +263,10 @@ function SidebarPlaylists({
     const update = () => {
       const distTop = el.scrollTop;
       const distBottom = el.scrollHeight - el.clientHeight - el.scrollTop;
-      el.style.setProperty("--fade-t", clamp(1 - distTop / FADE_RAMP).toFixed(3));
+      el.style.setProperty(
+        "--fade-t",
+        clamp(1 - distTop / FADE_RAMP).toFixed(3),
+      );
       el.style.setProperty(
         "--fade-b",
         clamp(1 - distBottom / FADE_RAMP).toFixed(3),
@@ -343,9 +341,7 @@ function SidebarPlaylists({
                       ) : (
                         <ListMusicIcon />
                       )}
-                      <span className="min-w-0 flex-1 truncate">
-                        {p.title}
-                      </span>
+                      <span className="min-w-0 flex-1 truncate">{p.title}</span>
                       {/* Subtle marker so the pinned/unpinned boundary is
                           legible — pinning's only visible effect is the
                           reorder, this just explains it. */}
@@ -393,8 +389,7 @@ function SidebarPlaylists({
 // Premium subscription. Kept here (not in a shared constants module)
 // because it's the only place that links out to it.
 const MANAGE_GOOGLE_URL = "https://myaccount.google.com/";
-const MANAGE_SUBSCRIPTION_URL =
-  "https://music.youtube.com/paid_memberships";
+const MANAGE_SUBSCRIPTION_URL = "https://music.youtube.com/paid_memberships";
 
 /**
  * The logged-out footer CTA: a full-width primary (brand red) button.
@@ -564,11 +559,7 @@ function UserProfile() {
               ) : null}
             </SidebarMenuButton>
           </DropdownMenuTrigger>
-          <DropdownMenuContent
-            side="top"
-            align="start"
-            className="min-w-64"
-          >
+          <DropdownMenuContent side="top" align="start" className="min-w-64">
             {email ? (
               <>
                 <DropdownMenuLabel className="truncate text-xs font-normal text-muted-foreground">
@@ -639,9 +630,7 @@ function UserProfile() {
               Manage Google Account
               <ExternalLinkIcon className="ms-auto" />
             </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={openExternal(MANAGE_SUBSCRIPTION_URL)}
-            >
+            <DropdownMenuItem onSelect={openExternal(MANAGE_SUBSCRIPTION_URL)}>
               <CreditCardIcon />
               Manage subscription
               <ExternalLinkIcon className="ms-auto" />

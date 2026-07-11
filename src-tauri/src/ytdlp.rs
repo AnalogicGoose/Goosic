@@ -26,14 +26,11 @@ const BINARY_NAME: &str = "yt-dlp";
 /// the newest release asset, so no GitHub API call (and no rate limit)
 /// is involved.
 #[cfg(windows)]
-const DOWNLOAD_URL: &str =
-    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
+const DOWNLOAD_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 #[cfg(target_os = "macos")]
-const DOWNLOAD_URL: &str =
-    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos";
+const DOWNLOAD_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos";
 #[cfg(all(unix, not(target_os = "macos")))]
-const DOWNLOAD_URL: &str =
-    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
+const DOWNLOAD_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
 
 /// How often to let the managed binary check for its own update.
 const UPDATE_INTERVAL: Duration = Duration::from_secs(72 * 60 * 60);
@@ -193,11 +190,7 @@ async fn download(managed: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = tokio::fs::set_permissions(
-            &part,
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .await;
+        let _ = tokio::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755)).await;
     }
 
     tokio::fs::rename(&part, managed)

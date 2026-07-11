@@ -39,10 +39,7 @@ import { PlayerMoreMenu } from "@/components/layout/player-more-menu";
 import { cn } from "@/lib/utils";
 import { usePlayerCoverDrag } from "@/lib/player-drag";
 import { usePlaybackStore, currentTrack } from "@/lib/store/playback";
-import {
-  useTrackSourceStore,
-  type SourceKind,
-} from "@/lib/store/track-source";
+import { useTrackSourceStore, type SourceKind } from "@/lib/store/track-source";
 import { findAlternateVideoId } from "@/lib/innertube/alternate-source";
 import { lookupITunesCover, cacheCoverToDisk } from "@/lib/cover-art";
 import type { QueueTrack, RepeatMode } from "@/lib/store/playback";
@@ -402,25 +399,18 @@ export function PlayerBar({
 }: {
   variant?: PlayerBarVariant;
 }) {
-  const {
-    playing,
-    status,
-    error,
-    position,
-    duration,
-    shuffle,
-    repeat,
-  } = usePlaybackStore(
-    useShallow((s) => ({
-      playing: s.playing,
-      status: s.status,
-      error: s.error,
-      position: s.position,
-      duration: s.duration,
-      shuffle: s.shuffle,
-      repeat: s.repeat,
-    })),
-  );
+  const { playing, status, error, position, duration, shuffle, repeat } =
+    usePlaybackStore(
+      useShallow((s) => ({
+        playing: s.playing,
+        status: s.status,
+        error: s.error,
+        position: s.position,
+        duration: s.duration,
+        shuffle: s.shuffle,
+        repeat: s.repeat,
+      })),
+    );
   const track = usePlaybackStore(currentTrack);
   const toggle = usePlaybackStore((s) => s.toggle);
   const next = usePlaybackStore((s) => s.next);
@@ -455,7 +445,7 @@ export function PlayerBar({
   // window's own layout.
   const wrapperClass =
     variant === "right"
-      ? "fixed bottom-2 right-2 top-(--titlebar-h) z-10 flex w-[22rem] flex-col rounded-[10px] border border-sidebar-border bg-surface"
+      ? "fixed bottom-2 right-2 top-(--titlebar-h) z-10 flex w-[22rem] flex-col rounded-[34px] border border-sidebar-border bg-surface"
       : "absolute inset-0 flex flex-col bg-surface";
 
   return (
@@ -469,8 +459,8 @@ export function PlayerBar({
     // 300ms, which makes the next tooltip pop up instantly — annoying
     // when the buttons are densely packed).
     <TooltipProvider delayDuration={800} skipDelayDuration={0}>
-    <aside className={wrapperClass}>
-      {/* Queue overlay vs. cover-and-lyrics body. AnimatePresence
+      <aside className={wrapperClass}>
+        {/* Queue overlay vs. cover-and-lyrics body. AnimatePresence
           crossfades the two when the user toggles the queue button.
           Both branches fill the card above the bottom action row
           (which stays rendered as the next aside child so the queue
@@ -478,203 +468,208 @@ export function PlayerBar({
           suppresses an opening fade on first mount — the player
           opens with the cover already visible, no need to animate it
           in from blank. */}
-      <AnimatePresence initial={false} mode="wait">
-        {queueOpen ? (
-          <motion.div
-            key="queue"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.07 }}
-            className="flex min-h-0 flex-1 flex-col"
-          >
-            <QueueBody onClose={() => setQueueOpen(false)} />
-          </motion.div>
-        ) : (
-          <motion.div
-            key="cover"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.07 }}
-            className="flex min-h-0 flex-1 flex-col"
-          >
-      {/* Top fixed section: cover, meta, progress, controls.
+        <AnimatePresence initial={false} mode="wait">
+          {queueOpen ? (
+            <motion.div
+              key="queue"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.07 }}
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <QueueBody onClose={() => setQueueOpen(false)} />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="cover"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.07 }}
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              {/* Top fixed section: cover, meta, progress, controls.
           Floating variant drops the top padding so the cover sits
           flush against the window's title bar — there's no card
           border or chrome to motivate inset there. */}
-      <div
-        className={cn(
-          "flex flex-col gap-3 p-4 pb-3",
-          variant === "floating" && "pt-0",
-        )}
-      >
-        {status === "error" && error ? (
-          <div className="truncate rounded-md bg-destructive/90 px-3 py-1 text-xs text-destructive-foreground shadow">
-            Playback error: {error}
-          </div>
-        ) : null}
+              <div
+                className={cn(
+                  "flex flex-col gap-3 p-4 pb-3",
+                  variant === "floating" && "pt-0",
+                )}
+              >
+                {status === "error" && error ? (
+                  <div className="truncate rounded-md bg-destructive/90 px-3 py-1 text-xs text-destructive-foreground shadow">
+                    Playback error: {error}
+                  </div>
+                ) : null}
 
-        {/* `max-w-[20rem]` caps the cover at 320px so it can't grow
+                {/* `max-w-[20rem]` caps the cover at 320px so it can't grow
             arbitrarily tall in the floating variant when the user
             resizes the window wider — that would push the Play/Pause
             button below the visible area. The right-card variant has
             an effective inner width of 320 anyway (22rem - p-4*2), so
             the cap is a no-op there. */}
-        <div
-          onPointerDown={onCoverPointerDown}
-          className={cn(
-            "mx-auto w-full max-w-[20rem] touch-none select-none",
-            variant !== "floating" && "cursor-grab active:cursor-grabbing",
-          )}
-        >
-          {track ? (
-            <Thumbnail
-              thumbnails={track.thumbnails}
-              alt={track.title}
-              className="aspect-square w-full rounded-md border border-hairline pointer-events-none"
-              targetSize={1024}
-              highRes
-              overrideHighRes={iTunesCover}
-            />
-          ) : (
-            <div className="aspect-square w-full rounded-md border border-hairline bg-muted" />
-          )}
-        </div>
+                <div
+                  onPointerDown={onCoverPointerDown}
+                  className={cn(
+                    "mx-auto w-full max-w-[20rem] touch-none select-none",
+                    variant !== "floating" &&
+                      "cursor-grab active:cursor-grabbing",
+                  )}
+                >
+                  {track ? (
+                    <Thumbnail
+                      thumbnails={track.thumbnails}
+                      alt={track.title}
+                      className="aspect-square w-full rounded-md border border-hairline pointer-events-none"
+                      targetSize={1024}
+                      highRes
+                      overrideHighRes={iTunesCover}
+                    />
+                  ) : (
+                    <div className="aspect-square w-full rounded-md border border-hairline bg-muted" />
+                  )}
+                </div>
 
-        {/* Title + artist with heart on the right */}
-        <div className="flex items-start gap-2">
-          <div className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate text-base font-medium">
-              {track?.title ?? "Nothing playing"}
-            </span>
-            {track ? (
-              <ArtistLinks
-                artists={track.artists}
-                fallback={track.subtitle ?? ""}
-                className="truncate text-sm text-muted-foreground"
-              />
-            ) : (
-              <span className="truncate text-sm text-muted-foreground">
-                Pick a track to start
-              </span>
-            )}
-          </div>
-          {track ? (
-            <LikeDislikeButtons videoId={track.videoId} track={track} className="-mt-1" />
-          ) : null}
-        </div>
+                {/* Title + artist with heart on the right */}
+                <div className="flex items-start gap-2">
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-base font-medium">
+                      {track?.title ?? "Nothing playing"}
+                    </span>
+                    {track ? (
+                      <ArtistLinks
+                        artists={track.artists}
+                        fallback={track.subtitle ?? ""}
+                        className="truncate text-sm text-muted-foreground"
+                      />
+                    ) : (
+                      <span className="truncate text-sm text-muted-foreground">
+                        Pick a track to start
+                      </span>
+                    )}
+                  </div>
+                  {track ? (
+                    <LikeDislikeButtons
+                      videoId={track.videoId}
+                      track={track}
+                      className="-mt-1"
+                    />
+                  ) : null}
+                </div>
 
-        {/* Progress */}
-        <div className="mt-2 flex flex-col gap-2.5">
-          <ProgressSlider
-            position={position}
-            duration={duration}
-            scrub={scrub}
-            setScrub={setScrub}
-            seek={seek}
-            disabled={!hasTrack || duration <= 0}
-          />
-          <div className="flex justify-between text-xs tabular-nums text-muted-foreground">
-            <span>{formatTime(scrub ?? position)}</span>
-            <span>{formatTime(duration)}</span>
-          </div>
-        </div>
+                {/* Progress */}
+                <div className="mt-2 flex flex-col gap-2.5">
+                  <ProgressSlider
+                    position={position}
+                    duration={duration}
+                    scrub={scrub}
+                    setScrub={setScrub}
+                    seek={seek}
+                    disabled={!hasTrack || duration <= 0}
+                  />
+                  <div className="flex justify-between text-xs tabular-nums text-muted-foreground">
+                    <span>{formatTime(scrub ?? position)}</span>
+                    <span>{formatTime(duration)}</span>
+                  </div>
+                </div>
 
-        {/* Main controls */}
-        <div className="-mt-2 flex items-center justify-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Shuffle"
-            aria-pressed={shuffle}
-            onClick={() => setShuffle(!shuffle)}
-            className={cn(shuffle && "text-brand")}
-          >
-            <ShuffleIcon />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Previous"
-            onClick={prev}
-            disabled={!hasTrack}
-          >
-            <SkipBackIcon className="fill-current" />
-          </Button>
-          <Button
-            size="icon"
-            aria-label={playing ? "Pause" : "Play"}
-            onClick={toggle}
-            disabled={!hasTrack}
-            className="size-12 rounded-full bg-brand text-white hover:bg-brand/90"
-          >
-            {loading ? (
-              <Loader2Icon className="animate-spin" />
-            ) : playing ? (
-              <PauseIcon className="fill-current" />
-            ) : (
-              <PlayIcon className="fill-current" />
-            )}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Next"
-            onClick={next}
-            disabled={!hasTrack}
-          >
-            <SkipForwardIcon className="fill-current" />
-          </Button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={repeatLabel(repeat)}
-                aria-pressed={repeat !== "off"}
-                onClick={cycleRepeat}
-                className={cn(repeat !== "off" && "text-brand")}
-              >
-                {repeat === "one" ? <Repeat1Icon /> : <RepeatIcon />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{repeatLabel(repeat)}</TooltipContent>
-          </Tooltip>
-        </div>
-      </div>
+                {/* Main controls */}
+                <div className="-mt-2 flex items-center justify-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Shuffle"
+                    aria-pressed={shuffle}
+                    onClick={() => setShuffle(!shuffle)}
+                    className={cn(shuffle && "text-brand")}
+                  >
+                    <ShuffleIcon />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Previous"
+                    onClick={prev}
+                    disabled={!hasTrack}
+                  >
+                    <SkipBackIcon className="fill-current" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    aria-label={playing ? "Pause" : "Play"}
+                    onClick={toggle}
+                    disabled={!hasTrack}
+                    className="size-12 rounded-full bg-brand text-white hover:bg-brand/90"
+                  >
+                    {loading ? (
+                      <Loader2Icon className="animate-spin" />
+                    ) : playing ? (
+                      <PauseIcon className="fill-current" />
+                    ) : (
+                      <PlayIcon className="fill-current" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Next"
+                    onClick={next}
+                    disabled={!hasTrack}
+                  >
+                    <SkipForwardIcon className="fill-current" />
+                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={repeatLabel(repeat)}
+                        aria-pressed={repeat !== "off"}
+                        onClick={cycleRepeat}
+                        className={cn(repeat !== "off" && "text-brand")}
+                      >
+                        {repeat === "one" ? <Repeat1Icon /> : <RepeatIcon />}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{repeatLabel(repeat)}</TooltipContent>
+                  </Tooltip>
+                </div>
+              </div>
 
-            {/* Lyrics flow — fills the rest of the cover-branch flex
+              {/* Lyrics flow — fills the rest of the cover-branch flex
                 column. Lives inside the same motion.div as the cover
                 so the whole non-queue body crossfades as one unit. */}
-            <div className="flex min-h-0 flex-1 flex-col px-3">
-              <LyricsBody state={lyricsState} />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              <div className="flex min-h-0 flex-1 flex-col px-3">
+                <LyricsBody state={lyricsState} />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-      {/* Bottom row: lyrics-source + queue + volume on the left,
+        {/* Bottom row: lyrics-source + queue + volume on the left,
           song/video toggle + more menu on the right. `PlayerMoreMenu`
           handles the floating-window case internally — its
           `onGoToArtist` callback emits a Tauri nav event there
           instead of calling `useNavigate` (which would throw without
           a router). */}
-      <div className="flex items-center justify-between gap-2 px-3 pt-2 pb-3">
-        <div className="flex items-center gap-0.5">
-          <LyricsSourceButton state={lyricsState} />
-          <QueueToggleButton
-            open={queueOpen}
-            onToggle={() => setQueueOpen((v) => !v)}
-          />
-          <VolumeControl />
+        <div className="flex items-center justify-between gap-2 px-3 pt-2 pb-3">
+          <div className="flex items-center gap-0.5">
+            <LyricsSourceButton state={lyricsState} />
+            <QueueToggleButton
+              open={queueOpen}
+              onToggle={() => setQueueOpen((v) => !v)}
+            />
+            <VolumeControl />
+          </div>
+          <div className="flex items-center gap-1">
+            {track && <SourceToggle track={track} />}
+            <PlayerMoreMenu track={track} includeSource={false} />
+          </div>
         </div>
-        <div className="flex items-center gap-1">
-          {track && <SourceToggle track={track} />}
-          <PlayerMoreMenu track={track} includeSource={false} />
-        </div>
-      </div>
-    </aside>
+      </aside>
     </TooltipProvider>
   );
 }

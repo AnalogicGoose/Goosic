@@ -8,10 +8,7 @@ import { usePlaybackStore, type QueueTrack } from "@/lib/store/playback";
 import { usePremiumStore } from "@/lib/store/premium";
 import { useSettingsStore } from "@/lib/store/settings";
 import { openPremiumGate } from "@/lib/store/premium-gate";
-import {
-  resolveStreamId,
-  useTrackSourceStore,
-} from "@/lib/store/track-source";
+import { resolveStreamId, useTrackSourceStore } from "@/lib/store/track-source";
 import { pickThumbnail } from "@/components/shared/thumbnail";
 
 /**
@@ -270,7 +267,10 @@ export function useAudioEngine() {
     // yt-dlp and pipes the audio bytes progressively so playback starts
     // as soon as the first chunk lands (typically ~200ms after the
     // yt-dlp subprocess starts emitting bytes).
-    streamUrlFor(streamVideoId)
+    const retryKey = videoId ? `${videoId}:${index}` : null;
+    streamUrlFor(streamVideoId, {
+      refresh: retryKey !== null && retriedTrackRef.current === retryKey,
+    })
       .then((src) => {
         if (token !== resolveTokenRef.current) return;
         if (import.meta.env.DEV) {
@@ -370,9 +370,7 @@ export function useAudioEngine() {
     if (usePlaybackStore.getState().playing && el.paused && el.src) {
       void el.play().catch((e) => {
         if (e?.name === "AbortError") return;
-        usePlaybackStore
-          .getState()
-          .setStatus("error", e?.message ?? String(e));
+        usePlaybackStore.getState().setStatus("error", e?.message ?? String(e));
       });
     }
   }, [pendingSeek]);
@@ -432,7 +430,8 @@ export function useAudioEngine() {
           store.prev();
           break;
         case "seek":
-          if (typeof e.payload.position === "number") store.seek(e.payload.position);
+          if (typeof e.payload.position === "number")
+            store.seek(e.payload.position);
           break;
       }
     }).then((un) => {
@@ -485,8 +484,7 @@ export function useAudioEngine() {
     useShallow((s) => ({
       qLen: s.queue.length,
       qIndex: s.index,
-      seedVideoId:
-        s.index >= 0 ? s.queue[s.index]?.videoId : undefined,
+      seedVideoId: s.index >= 0 ? s.queue[s.index]?.videoId : undefined,
     })),
   );
   const radioFetchedForRef = useRef<string | undefined>(undefined);
