@@ -26,6 +26,7 @@ use tower_http::services::ServeFile;
 
 mod appid;
 mod discord;
+mod lastfm;
 mod media;
 mod ytdlp;
 
@@ -2980,6 +2981,7 @@ pub fn run() {
         .manage(JarWriteLock::default())
         .manage(RefreshGuard::default())
         .manage(discord::spawn())
+        .manage(lastfm::LastfmState::default())
         .invoke_handler(tauri::generate_handler![
             ensure_ytdlp,
             resolve_stream_ytdlp,
@@ -3019,6 +3021,14 @@ pub fn run() {
             discord::discord_update,
             discord::discord_clear,
             discord::discord_set_enabled,
+            lastfm::lastfm_is_configured,
+            lastfm::lastfm_begin_auth,
+            lastfm::lastfm_poll_session,
+            lastfm::lastfm_user_info,
+            lastfm::lastfm_update_now_playing,
+            lastfm::lastfm_scrobble,
+            lastfm::lastfm_love,
+            lastfm::lastfm_flush,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -3061,6 +3071,10 @@ pub fn run() {
             let cache_root = stored_cache_root(app.handle())
                 .unwrap_or_else(|| default_cache_root(app.handle()));
             app.manage(ActiveCacheRoot(cache_root.clone()));
+            // Retry any scrobbles stranded offline on the previous run. Spawns
+            // its own task; a no-op when Last.fm isn't configured or the queue
+            // is empty. See src/lastfm.rs.
+            lastfm::flush_on_startup(app.handle().clone());
             let cache_dir = cache_root.join("stream");
             let ephemeral_dir = cache_root.join("stream-ephemeral");
             let cover_dir = cache_root.join("covers");

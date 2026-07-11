@@ -27,7 +27,7 @@ const TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: "general", label: "General", icon: Settings2Icon },
   { id: "appearance", label: "Appearance", icon: PaletteIcon },
   { id: "storage", label: "Storage", icon: DatabaseIcon },
-  { id: "integrations", label: "API Integrations", icon: PlugIcon },
+  { id: "integrations", label: "Integrations", icon: PlugIcon },
 ];
 
 /**
