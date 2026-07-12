@@ -38,13 +38,32 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.3.3",
+    date: "July 2026",
+    image: "/whats-new/0.3.0.svg",
+    sections: [
+      {
+        heading: "Desktop navigation",
+        items: [
+          "Use the new arrow controls or the native scrollbar to browse horizontal shelves.",
+          "Open artist pages from artist names across cards, queues, track lists, and player surfaces.",
+          "See playlist tracks and YouTube autoplay recommendations in separate queue sections.",
+        ],
+      },
+      {
+        heading: "Automatic updates",
+        body: "Future releases can now be downloaded and verified automatically from AnalogicGoose/YTubic.",
+      },
+    ],
+  },
+  {
     version: "0.3.2",
     date: "July 2026",
     image: "/whats-new/0.3.0.svg",
     sections: [
       {
         heading: "Bug fix",
-        body: "Connecting a Last.fm account failed with an \"Invalid API key\" error in 0.3.0 and 0.3.1 because the release pipeline corrupted the API credentials. That's fixed for good now, so head to the Integrations tab and connect your account.",
+        body: 'Connecting a Last.fm account failed with an "Invalid API key" error in 0.3.0 and 0.3.1 because the release pipeline corrupted the API credentials. That\'s fixed for good now, so head to the Integrations tab and connect your account.',
       },
     ],
   },
@@ -107,7 +126,7 @@ export const WHATS_NEW: WhatsNewEntry[] = [
       {
         heading: "Fixes",
         items: [
-          "Fixed the Windows Now Playing tile showing \"Unknown app\" instead of YTubic's name and icon.",
+          'Fixed the Windows Now Playing tile showing "Unknown app" instead of YTubic\'s name and icon.',
           "Fixed a bug where some songs wouldn't load, or wouldn't load on the first try.",
         ],
       },

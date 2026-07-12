@@ -1,4 +1,4 @@
-# Builds the Windows installer and publishes a draft GitHub Release
+# Builds the Windows installer and publishes a GitHub Release
 # whenever a `v*` tag is pushed. Publish flow:
 #   git tag v0.1.0 && git push origin v0.1.0
 # → wait for this workflow → review the draft on the Releases page → publish.
@@ -45,5 +45,5 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "YTubic ${{ github.ref_name }}"
           releaseBody: "See the assets below to download and install this version."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
