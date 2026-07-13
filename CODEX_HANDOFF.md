@@ -4,7 +4,7 @@
 > engineering, UI, release, and troubleshooting context for this repository.
 >
 > Last verified: **2026-07-13**
-> Current app version: **0.4.1**
+> Current app version: **0.4.2**
 > Current `main`: **includes the AppImage GStreamer packaging fix prepared on top of `b34ff95`**
 > Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.4.1>
 
@@ -673,6 +673,9 @@ persisted and synchronized across native windows.
 
 ## 18. Recent release history
 
+- `v0.4.2` — bundles the complete GStreamer media framework into the Linux
+  AppImage and verifies required plugins in GitHub Actions, fixing the packaged
+  WebKit process crash caused by missing `appsink`/`autoaudiosink`.
 - `v0.4.1` / `ef4bff1` — added the Linux DMABUF renderer safeguard. The
   initially failed Linux job succeeded on retry and published all Linux
   assets, but this AppImage predates the GStreamer media-framework fix.
@@ -697,9 +700,9 @@ At the time this document was last refreshed:
 - The rerun release workflow completed successfully for Windows and Linux.
 - Public assets included Windows NSIS, Linux AppImage/deb/rpm, signatures, and
   a cross-platform `latest.json`.
-- The v0.4.1 AppImage is still affected by the missing-GStreamer runtime bug;
-  the fix is pending the next release and real CachyOS/KDE validation.
-- The pending fix passed Tauri config inspection, 53/53 Vitest tests, frontend
+- The v0.4.1 AppImage is affected by the missing-GStreamer runtime bug. v0.4.2
+  contains the packaging fix and still requires real CachyOS/KDE validation.
+- The v0.4.2 fix passed Tauri config inspection, 53/53 Vitest tests, frontend
   production build/typecheck, Rust check, lint with the same eight historical
   warnings and zero errors, and a local optimized Windows Tauri build.
 - `CODEX_HANDOFF.md` and its `AGENTS.md` discovery pointer are new local changes

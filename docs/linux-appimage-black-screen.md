@@ -32,9 +32,9 @@ no era suficiente para este crash del AppImage.
 
 ## Síntoma reportado
 
-- Build afectado: `Goosic_0.4.0_amd64.AppImage` (release v0.4.0 — la única build de Linux
-  publicada hasta ahora; v0.4.1 nunca generó artefactos Linux, ver
-  `docs/linux-ci-build-failure.md`).
+- Builds afectados: `Goosic_0.4.0_amd64.AppImage` y `Goosic_0.4.1_amd64.AppImage`.
+  El job Linux inicial de v0.4.1 falló, pero su reintento sí publicó los artefactos;
+  ambos AppImages son anteriores al fix GStreamer de v0.4.2.
 - La app abre y carga la UI normalmente.
 - Al interactuar (reportado como "elijo una canción" / deja de responder a input), dejar
   de responder — no procesa más clicks/teclado.
@@ -50,9 +50,8 @@ cuelga/pinta en negro en el primer paint pesado de GPU. Ya lo habíamos pisado e
 resuelto ahí con `WEBKIT_DISABLE_DMABUF_RENDERER=1` en el entorno. Ese workaround nunca
 había entrado al binario empaquetado.
 
-**Fix ya aplicado en `main`** (commit `ef4bff1`, incluido en v0.4.1 fuente — pero el
-artefacto Linux de v0.4.1 nunca se publicó porque el job `build-linux` falló en CI, ver
-el otro doc): `src-tauri/src/main.rs` ahora hace, antes de que arranque GTK/WebKit:
+**Defensa ya aplicada en `main`** (commit `ef4bff1`, incluido en v0.4.1):
+`src-tauri/src/main.rs` ahora hace, antes de que arranque GTK/WebKit:
 
 ```rust
 #[cfg(target_os = "linux")]

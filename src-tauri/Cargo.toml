@@ -1,6 +1,6 @@
 [package]
 name = "goosic"
-version = "0.4.1"
+version = "0.4.2"
 description = "Goosic — fast, responsive YouTube Music desktop client"
 authors = ["George Shyshov"]
 license = "GPL-3.0-only"
