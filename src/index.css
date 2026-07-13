@@ -337,13 +337,18 @@
 
   .album-mesh-grid {
     position: absolute;
-    inset: -20%;
+    inset: -30%;
     display: grid;
     grid-template-columns: repeat(6, minmax(0, 1fr));
     grid-template-rows: repeat(6, minmax(0, 1fr));
+    /* Blur the color source itself. Packaged WebView2 builds can exclude
+       sibling compositor layers from a nested backdrop-filter, which exposed
+       the raw mosaic as large squares. A direct filter is deterministic in
+       both development and release builds. */
+    filter: blur(clamp(110px, 9vw, 160px)) saturate(108%);
     transform: translate3d(-2%, -1%, 0) scale(1.12) rotate(-1deg);
     animation: album-mesh-grid-drift 28s ease-in-out -8s infinite alternate;
-    will-change: transform;
+    will-change: transform, filter;
     backface-visibility: hidden;
   }
 
@@ -370,8 +375,8 @@
     position: absolute;
     inset: -2px;
     background: rgb(255 255 255 / 8%);
-    backdrop-filter: blur(90px) saturate(108%);
-    -webkit-backdrop-filter: blur(90px) saturate(108%);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
     transform: translateZ(0);
   }
 
