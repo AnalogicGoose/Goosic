@@ -197,7 +197,7 @@ problem, add Fider/Canny later and just change the button's URL.
 
 ### Phase 1 — GitHub
 
-- [x] Public repository created and pushed — **https://github.com/AnalogicGoose/YTubic**
+- [x] Public repository created and pushed — **https://github.com/AnalogicGoose/Goosic**
       (2026-07-05); Discussions enabled, topics added; gh CLI installed and
       authorized
 - [ ] README: app screenshots (the rest — installation, FAQ — already done)
@@ -211,7 +211,7 @@ problem, add Fider/Canny later and just change the button's URL.
 - [x] tauri-plugin-updater + tauri-plugin-process; keys: private —
       `C:\Users\ivasy\.tauri\ytubic.key` (**keep safe!**, copy in GitHub Secrets),
       public embedded in tauri.conf.json; endpoint —
-      `AnalogicGoose/YTubic/releases/latest/download/latest.json`; targets → ["nsis"],
+      `AnalogicGoose/Goosic/releases/latest/download/latest.json`; targets → ["nsis"],
       createUpdaterArtifacts on
 - [x] "Check for Updates" button + silent check on startup (src/lib/updater.ts):
       toasts, download progress, Restart now; disabled in dev mode
@@ -224,7 +224,7 @@ problem, add Fider/Canny later and just change the button's URL.
       GPL link, GitHub / Check for updates buttons. The last "Soon" menu item
       was removed
 - [x] Report Issue → pre-filled GitHub issue with diagnostics (version, OS) —
-      opens `AnalogicGoose/YTubic/issues/new` via plugin-opener
+      opens `AnalogicGoose/Goosic/issues/new` via plugin-opener
 - [ ] (opt.) Third-party licenses screen
 
 ### Phase 4 — v0.1.0 release

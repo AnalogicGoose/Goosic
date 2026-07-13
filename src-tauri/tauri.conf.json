@@ -46,7 +46,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyMDhEQkQyMjhBNUZCMjEKUldRaCs2VW8wdHNJNG1jVU9ZTGkycUZNUFQ3eXYzZ1lrM25pZkNwc0s2OTlRbUFtRXlXYXhxcHoK",
       "endpoints": [
-        "https://github.com/AnalogicGoose/YTubic/releases/latest/download/latest.json"
+        "https://github.com/AnalogicGoose/Goosic/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

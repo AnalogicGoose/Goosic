@@ -13,7 +13,7 @@ import { checkForUpdates } from "@/lib/updater";
 import { openWhatsNew } from "@/lib/store/whats-new";
 import { APP_ICON, APP_NAME } from "@/lib/branding";
 
-const REPO_URL = "https://github.com/AnalogicGoose/YTubic";
+const REPO_URL = "https://github.com/AnalogicGoose/Goosic";
 const KOFI_URL = "https://ko-fi.com/nuberr";
 
 const CREDITS: { name: string; role: string; url: string }[] = [
