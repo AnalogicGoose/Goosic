@@ -5,7 +5,7 @@
 <h1 align="center">Goosic</h1>
 
 <p align="center">
-  A fast, responsive YouTube Music desktop client for Windows and Linux.
+  A fast, responsive YouTube Music desktop client for Windows, macOS, and Linux.
 </p>
 
 <p align="center">
@@ -46,6 +46,8 @@ Built as a reaction to the sluggish webview-wrapper experience — Goosic talks 
 Download the latest package from the [Releases](https://github.com/AnalogicGoose/Goosic/releases) page and run it.
 
 - **Windows**: `.exe` installer (NSIS), Windows 10/11.
+- **macOS**: universal `.dmg` for Apple Silicon and Intel. The current build is
+  ad-hoc signed, so macOS may require a Gatekeeper override on first launch.
 - **Linux**: `.AppImage` (no install step, just `chmod +x` and run), `.deb`
   (Debian/Ubuntu), or `.rpm` (Fedora/openSUSE). Only the AppImage build
   auto-updates itself; the `.deb`/`.rpm` packages need a manual re-download.

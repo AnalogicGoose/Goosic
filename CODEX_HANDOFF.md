@@ -4,9 +4,9 @@
 > engineering, UI, release, and troubleshooting context for this repository.
 >
 > Last verified: **2026-07-13**
-> Current app version: **0.4.2**
-> Current `main`: **includes the AppImage GStreamer packaging fix prepared on top of `b34ff95`**
-> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.4.1>
+> Current app version: **0.4.3**
+> Current `main`: **v0.4.2 release source plus the prepared v0.4.3 universal macOS release work**
+> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.4.2>
 
 ## 1. New-session quick start
 
@@ -455,6 +455,8 @@ Each successful release should contain:
 - `Goosic_<version>_amd64.AppImage` and `.sig`
 - `Goosic_<version>_amd64.deb` and `.sig`
 - `Goosic-<version>-1.x86_64.rpm` and `.sig`
+- `Goosic_<version>_universal.dmg`
+- `Goosic.app.tar.gz` and `.sig` (macOS updater artifact)
 - `latest.json`
 
 ## 12. Exact release procedure
@@ -512,8 +514,8 @@ gh run watch <run-id> -R AnalogicGoose/Goosic --exit-status
 gh release view vX.Y.Z -R AnalogicGoose/Goosic --json name,url,assets
 ```
 
-Do not tell the user the release is downloadable until both Windows and Linux
-jobs are green and all expected assets are in the public release.
+Do not tell the user the release is downloadable until Windows, Linux, and
+macOS jobs are green and all expected assets are in the public release.
 
 ## 13. Development commands
 
@@ -579,6 +581,20 @@ Building an AppImage locally on Arch/CachyOS has a separate `linuxdeploy`
 `strip`/`.relr.dyn` incompatibility. See
 `docs/linux-appimage-local-build-workaround.md`; it does not apply to the
 Ubuntu GitHub runner.
+
+### macOS build contract
+
+The release workflow builds `universal-apple-darwin` on `macos-15`, combining
+Apple Silicon and Intel targets into one app/DMG. Platform jobs remain
+sequential so their `tauri-action` invocations append safely to one release.
+
+No Apple Developer certificate or notarization credentials are currently
+configured. The workflow uses `APPLE_SIGNING_IDENTITY: "-"` for an ad-hoc code
+signature; users may need to approve Goosic through macOS Privacy & Security on
+first launch. Replace this with Apple signing/notarization secrets when they
+become available. Account cookie jars are AES-256-GCM encrypted and their key
+is stored in the native login Keychain; do not restore plaintext passthrough on
+macOS.
 
 ## 14. Test and review matrix
 
@@ -673,6 +689,9 @@ persisted and synchronized across native windows.
 
 ## 18. Recent release history
 
+- `v0.4.3` — adds a universal Apple Silicon/Intel macOS DMG and updater
+  artifact, plus native Keychain-backed account-cookie encryption. The initial
+  macOS build is ad-hoc signed until Apple Developer credentials are provided.
 - `v0.4.2` — bundles the complete GStreamer media framework into the Linux
   AppImage and verifies required plugins in GitHub Actions, fixing the packaged
   WebKit process crash caused by missing `appsink`/`autoaudiosink`.
@@ -694,19 +713,14 @@ persisted and synchronized across native windows.
 
 At the time this document was last refreshed:
 
-- Work began from `main`/`origin/main` at `b34ff95`; check `git log -1` and
-  `git status -sb` for the fix commit's current push state.
-- Public latest release was Goosic `v0.4.1`.
-- The rerun release workflow completed successfully for Windows and Linux.
-- Public assets included Windows NSIS, Linux AppImage/deb/rpm, signatures, and
-  a cross-platform `latest.json`.
-- The v0.4.1 AppImage is affected by the missing-GStreamer runtime bug. v0.4.2
-  contains the packaging fix and still requires real CachyOS/KDE validation.
-- The v0.4.2 fix passed Tauri config inspection, 53/53 Vitest tests, frontend
-  production build/typecheck, Rust check, lint with the same eight historical
-  warnings and zero errors, and a local optimized Windows Tauri build.
-- `CODEX_HANDOFF.md` and its `AGENTS.md` discovery pointer are new local changes
-  until committed in a later step.
+- `v0.4.2` is public; its Windows job passed and its Linux job was still
+  building when v0.4.3 preparation began.
+- Prepared v0.4.3 adds the sequential universal macOS GitHub Actions job,
+  ad-hoc signing, DMG/updater output, and native Keychain-backed cookie-key
+  storage. It has no Apple certificate/notarization credentials yet.
+- The v0.4.3 changes passed 53/53 Vitest tests, frontend production
+  build/typecheck, Rust check, lint with the same eight historical warnings and
+  zero errors, and a local optimized Windows Tauri build.
 
 When this snapshot becomes stale, update this section, the header version, and
 the recent release history as part of the next release.

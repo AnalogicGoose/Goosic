@@ -1,6 +1,6 @@
 [package]
 name = "goosic"
-version = "0.4.2"
+version = "0.4.3"
 description = "Goosic — fast, responsive YouTube Music desktop client"
 authors = ["George Shyshov"]
 license = "GPL-3.0-only"
@@ -91,6 +91,12 @@ windows-sys = { version = "0.59", features = [
 # secret-service client (`dbus-secret-service`, needs system libdbus) and the
 # kernel keyutils backend, matching our synchronous (spawn_blocking) usage.
 keyring = { version = "3", features = ["linux-native-sync-persistent"] }
+aes-gcm = "0.10"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The login Keychain stores only the random AES key; the cookie jar is
+# encrypted locally because keyrings are intended for small secrets.
+keyring = { version = "3", features = ["apple-native"] }
 aes-gcm = "0.10"
 
 [dev-dependencies]

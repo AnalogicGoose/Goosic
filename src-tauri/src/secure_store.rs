@@ -7,8 +7,9 @@
 //!   `keyring` crate) holds a random AES-256 key; the cookie blob itself is
 //!   encrypted locally with that key via AES-256-GCM. Keyrings are built for
 //!   small secrets, not arbitrary-length blobs, hence the two-layer scheme.
-//! - Everything else (macOS, BSD, ...): plaintext passthrough (FIXME: hook
-//!   into macOS Keychain when we ship there).
+//! - macOS: the login Keychain holds a random AES-256 key; the cookie blob is
+//!   encrypted locally with that key via AES-256-GCM.
+//! - Everything else (BSD, ...): plaintext passthrough.
 //!
 //! `encrypt`/`decrypt` are blocking (DPAPI, and on Linux D-Bus/keyutils
 //! calls, all block) — every call site must run them via
@@ -206,15 +207,90 @@ pub fn decrypt(encrypted: &[u8]) -> Result<Vec<u8>, String> {
     linux::decrypt(encrypted)
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
-// No OS-native secret store wired up on this platform yet (macOS Keychain
-// support is future work — see docs/release-plan.md). Passthrough, matching
-// this module's behavior before Linux got its own keyring-backed path.
+#[cfg(target_os = "macos")]
+mod macos {
+    use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
+    use aes_gcm::{Aes256Gcm, Key, Nonce};
+    use keyring::Entry;
+
+    const TAG_AES_GCM: u8 = 0x01;
+    const NONCE_LEN: usize = 12;
+    const SERVICE: &str = "com.github.ivasy.ytubic";
+    const ACCOUNT: &str = "cookies-key";
+    const NETSCAPE_COOKIE_HEADER: &[u8] = b"# Netscape HTTP Cookie File";
+
+    fn load_or_create_key() -> Result<Key<Aes256Gcm>, String> {
+        let entry = Entry::new(SERVICE, ACCOUNT).map_err(|e| format!("Keychain entry: {e}"))?;
+        match entry.get_secret() {
+            Ok(bytes) if bytes.len() == 32 => Ok(*Key::<Aes256Gcm>::from_slice(&bytes)),
+            Ok(bytes) => Err(format!(
+                "Keychain cookie key has invalid length: {}",
+                bytes.len()
+            )),
+            Err(keyring::Error::NoEntry) => {
+                let key = Aes256Gcm::generate_key(&mut OsRng);
+                entry
+                    .set_secret(key.as_slice())
+                    .map_err(|e| format!("Keychain set_secret: {e}"))?;
+                Ok(key)
+            }
+            Err(e) => Err(format!("Keychain get_secret: {e}")),
+        }
+    }
+
+    pub fn encrypt(plain: &[u8]) -> Result<Vec<u8>, String> {
+        let cipher = Aes256Gcm::new(&load_or_create_key()?);
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+        let ciphertext = cipher
+            .encrypt(&nonce, plain)
+            .map_err(|e| format!("aes-gcm encrypt: {e}"))?;
+        let mut out = Vec::with_capacity(1 + NONCE_LEN + ciphertext.len());
+        out.push(TAG_AES_GCM);
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&ciphertext);
+        Ok(out)
+    }
+
+    pub fn decrypt(encrypted: &[u8]) -> Result<Vec<u8>, String> {
+        // Safely migrate cookie jars created by pre-Keychain development builds.
+        if encrypted.starts_with(NETSCAPE_COOKIE_HEADER) {
+            return Ok(encrypted.to_vec());
+        }
+        let (&tag, rest) = encrypted
+            .split_first()
+            .ok_or_else(|| "empty encrypted blob".to_string())?;
+        if tag != TAG_AES_GCM {
+            return Err(format!("unknown secure_store tag: {tag}"));
+        }
+        if rest.len() < NONCE_LEN {
+            return Err("encrypted blob shorter than nonce".into());
+        }
+        let (nonce_bytes, ciphertext) = rest.split_at(NONCE_LEN);
+        let cipher = Aes256Gcm::new(&load_or_create_key()?);
+        cipher
+            .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+            .map_err(|e| format!("aes-gcm decrypt: {e}"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn encrypt(plain: &[u8]) -> Result<Vec<u8>, String> {
+    macos::encrypt(plain)
+}
+
+#[cfg(target_os = "macos")]
+pub fn decrypt(encrypted: &[u8]) -> Result<Vec<u8>, String> {
+    macos::decrypt(encrypted)
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+// No OS-native secret store is wired up on this remaining platform. Preserve
+// the historical passthrough for unsupported BSD/other targets.
 pub fn encrypt(plain: &[u8]) -> Result<Vec<u8>, String> {
     Ok(plain.to_vec())
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub fn decrypt(encrypted: &[u8]) -> Result<Vec<u8>, String> {
     Ok(encrypted.to_vec())
 }

@@ -1,4 +1,4 @@
-# Builds the Windows and Linux installers and publishes a GitHub Release
+# Builds Windows, Linux, and universal macOS installers and publishes a GitHub Release
 # whenever a `v*` tag is pushed. Publish flow:
 #   git tag v0.1.0 && git push origin v0.1.0
 # → wait for this workflow → review the draft on the Releases page → publish.
@@ -8,12 +8,11 @@
 # secrets are set, they resolve to empty strings and the build simply
 # skips updater artifacts.
 #
-# build-linux runs after build-windows (not in parallel): tauri-action
+# Platform jobs run sequentially: tauri-action
 # finds-or-creates a release by tag name, and two jobs racing to create it
 # for the same tag can end up creating two separate releases instead of
-# sharing one. Making build-linux `needs: build-windows` means it always
-# runs against a release that already exists, so it just appends its
-# artifacts (.AppImage/.deb/.rpm + updater .sig files) to it.
+# sharing one. Windows creates the release; Linux and macOS append their
+# platform artifacts in order.
 name: Release
 
 on:
@@ -115,3 +114,40 @@ jobs:
           test -f squashfs-root/usr/lib/gstreamer-1.0/libgstapp.so
           test -f squashfs-root/usr/lib/gstreamer-1.0/libgstautodetect.so
           test -f squashfs-root/usr/lib/gstreamer-1.0/libgstlibav.so
+
+  build-macos:
+    needs: build-linux
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          YTUBIC_LASTFM_API_KEY: ${{ secrets.YTUBIC_LASTFM_API_KEY }}
+          YTUBIC_LASTFM_API_SECRET: ${{ secrets.YTUBIC_LASTFM_API_SECRET }}
+          # No Apple Developer certificate is configured yet. Ad-hoc signing
+          # is valid for Apple Silicon but does not remove Gatekeeper warnings.
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Goosic ${{ github.ref_name }}"
+          releaseBody: "See the assets below to download and install this version. macOS builds are ad-hoc signed and may require a Gatekeeper override on first launch."
+          releaseDraft: false
+          prerelease: false
+          args: --target universal-apple-darwin --bundles app,dmg
