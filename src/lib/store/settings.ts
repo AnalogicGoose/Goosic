@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { isWindowsWebview } from "@/lib/platform";
+import { isVisualThemeId, type VisualThemeId } from "@/lib/themes";
 
 export type CloseButtonAction = "tray" | "quit";
 export type CacheAutoCleanPeriod = "off" | "daily" | "weekly" | "monthly";
@@ -19,6 +20,9 @@ type State = {
   /** Window backdrop: "ambient" tints with blurred album art,
    *  "plain" keeps the flat theme background. */
   background: BackgroundMode;
+  /** The semantic visual child theme. Components consume the same token
+   *  contract; this value only selects which token set is mounted. */
+  visualTheme: VisualThemeId;
   /** Experimental animated mesh derived from the current cover. When false,
    *  Ambient mode uses the original blurred-cover implementation. */
   dynamicAlbumMesh: boolean;
@@ -56,6 +60,7 @@ type State = {
   setCacheAutoClean: (v: CacheAutoCleanPeriod) => void;
   markCacheCleaned: () => void;
   setBackground: (v: BackgroundMode) => void;
+  setVisualTheme: (v: VisualThemeId) => void;
   setDynamicAlbumMesh: (v: boolean) => void;
   setLiquidGlassRefraction: (v: boolean) => void;
   setPlaybackNotifications: (v: boolean) => void;
@@ -82,6 +87,7 @@ export const useSettingsStore = create<State>()(
       cacheAutoClean: "off",
       lastCacheCleanAt: 0,
       background: "ambient",
+      visualTheme: "goosic",
       dynamicAlbumMesh: true,
       liquidGlassRefraction: true,
       playbackNotifications: false,
@@ -95,6 +101,7 @@ export const useSettingsStore = create<State>()(
       setCacheAutoClean: (cacheAutoClean) => set({ cacheAutoClean }),
       markCacheCleaned: () => set({ lastCacheCleanAt: Date.now() }),
       setBackground: (background) => set({ background }),
+      setVisualTheme: (visualTheme) => set({ visualTheme }),
       setDynamicAlbumMesh: (dynamicAlbumMesh) => set({ dynamicAlbumMesh }),
       setLiquidGlassRefraction: (liquidGlassRefraction) =>
         set({ liquidGlassRefraction }),
@@ -116,7 +123,19 @@ export const useSettingsStore = create<State>()(
           lastfmLoveSync: false,
         }),
     }),
-    { name: "ytm-settings" },
+    {
+      name: "ytm-settings",
+      // Old installs may have no visualTheme yet, and corrupted/manual
+      // storage should never prevent settings from hydrating.
+      merge: (persisted, current) => {
+        const value = (persisted as Partial<State> | undefined)?.visualTheme;
+        return {
+          ...current,
+          ...(persisted as Partial<State>),
+          visualTheme: isVisualThemeId(value) ? value : current.visualTheme,
+        };
+      },
+    },
   ),
 );
 

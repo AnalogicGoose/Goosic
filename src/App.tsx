@@ -11,6 +11,8 @@ import {
 import { routeTree } from "@/routeTree.gen";
 import { isFloatingPlayerWindow } from "@/lib/floating-player";
 import FloatingPlayerApp from "@/components/layout/floating-player-app";
+import { useSettingsStore } from "@/lib/store/settings";
+import { useVisualTheme } from "@/lib/themes";
 
 const router = createRouter({
   routeTree,
@@ -26,11 +28,15 @@ declare module "@tanstack/react-router" {
 }
 
 export default function App() {
+  const visualTheme = useSettingsStore((state) => state.visualTheme);
+  useVisualTheme(visualTheme);
+
   // The same Vite bundle is loaded in both windows; the standalone
   // floating player skips routing/shell entirely.
   if (isFloatingPlayerWindow()) {
     return <FloatingPlayerApp />;
   }
+
   return (
     <ThemeProvider
       attribute="class"

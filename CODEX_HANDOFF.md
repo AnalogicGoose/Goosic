@@ -3,7 +3,7 @@
 > **Read this file first in every new Codex session.** It is the durable product,
 > engineering, UI, release, and troubleshooting context for this repository.
 >
-> Last verified: **2026-07-15**
+> Last verified: **2026-07-16**
 > Current app version: **0.4.5**
 > Current `main`: **v0.4.5 release candidate with Figma Glass menu/player fixes**
 > Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.4.3>
@@ -225,7 +225,13 @@ window automatically appears in the other.
 - `src/lib/store/playback.ts` — queue, history, repeat, shuffle, autoplay, and
   playback actions. The floating window uses a remote-control bridge.
 - `src/lib/store/layout.ts` — `right`, `bottom`, and `floating` player layout.
-- `src/lib/store/settings.ts` — persisted settings and Rust sync hooks.
+- `src/lib/store/settings.ts` — persisted settings and Rust sync hooks,
+  including the selected visual child theme.
+- `src/lib/themes.ts` — the visual-theme registry and token applier. Themes
+  are data-driven children of one shared visual contract; components should
+  consume semantic Tailwind tokens/material variables instead of branching on
+  theme IDs. The current selector offers Goosic, Ocean, Sunset, and Mono and
+  persists to the `visualTheme` field in `ytm-settings`.
 - `src/lib/store/track-source.ts` — song/video source pairing and selection.
 - `src/lib/updater.ts` and `src/lib/store/update.ts` — update state machine.
 - `src/lib/lyrics/` — lyrics providers, matching, and LRC parsing.
@@ -266,6 +272,18 @@ window automatically appears in the other.
 Use `GLASS_SURFACE_CLASS` for menus/popovers and
 `PLAYER_GLASS_SURFACE_CLASS` for player surfaces. This keeps light/dark colors,
 hairlines, inset highlights, shadows, and blur consistent.
+
+### Modular visual themes
+
+`src/lib/themes.ts` is the master visual component for interface styles. Each
+theme child provides light/dark semantic tokens (`--background`, `--primary`,
+`--sidebar`, etc.) plus material tokens (`--glass-*`, `--app-font-family`, and
+`--radius`). `useVisualTheme()` mounts the selected token set on the root and
+observes the next-themes `dark` class, so a Light/Dark switch re-applies the
+same child theme's matching mode. Keep new UI on semantic tokens and shared
+material classes; do not add per-theme conditionals to individual components.
+The Appearance settings tab is the first consumer-facing selector. Add future
+themes by extending `VISUAL_THEMES`, not by copying component CSS.
 
 The player material intentionally uses approximately **10% surface tint** so
 the content/album background remains visible beneath it.
@@ -873,6 +891,11 @@ At the time this document was last refreshed:
 - The Windows Liquid Glass experiment now uses dimension-matched Figma-style
   refraction/specular/dispersion filters with a safe WebView2 scale. Real
   WebView2 player, context-menu, Queue, and Lyrics checks passed.
+- The modular visual-theme foundation is now in place. Appearance exposes a
+  complete Interface style selector backed by `src/lib/themes.ts`; Goosic,
+  Ocean, Sunset, and Mono all share the same semantic component/material
+  contract and persist through `ytm-settings`. Future styles should be added
+  as registry children rather than copied component CSS.
 
 When this snapshot becomes stale, update this section, the header version, and
 the recent release history as part of the next release.
