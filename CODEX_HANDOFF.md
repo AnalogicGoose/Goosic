@@ -4,9 +4,9 @@
 > engineering, UI, release, and troubleshooting context for this repository.
 >
 > Last verified: **2026-07-16**
-> Current app version: **0.4.5**
-> Current `main`: **post-v0.4.5 glass/theme and memory refinements**
-> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.4.5>
+> Current app version: **0.4.6**
+> Current `main`: **v0.4.6 glass/theme and memory refinements**
+> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.4.6>
 
 ## 1. New-session quick start
 
@@ -857,6 +857,9 @@ persisted and synchronized across native windows.
 
 ## 18. Recent release history
 
+- `v0.4.6` — adds the shared configurable glass material to the sidebar,
+  prevents native image/link dragging, bounds WebView2 refraction memory, and
+  lowers the hidden authenticated session keeper's Windows memory target.
 - `v0.4.5` — Figma Glass preset across menus/player, complete pixel-matched
   frames, capped WebView2 refraction, immersive player mode, and lower-cost
   floating-player WebView.
@@ -886,8 +889,10 @@ persisted and synchronized across native windows.
 
 At the time this document was last refreshed:
 
-- `v0.4.5` is public with Windows, Linux, and universal macOS artifacts. It
-  includes the Figma Glass preset,
+- `v0.4.6` is public with Windows, Linux, and universal macOS artifacts. It
+  adds shared sidebar glass, Default/Modern bottom-player layouts, global glass
+  opacity/blur controls, native drag prevention, and lower WebView2 memory use.
+- `v0.4.5` introduced the Figma Glass preset,
   pixel-exact menu filters, capped refraction/dispersion, immersive player
   mode, and floating-player GPU safeguards. It also includes the Safari-
   identified macOS
