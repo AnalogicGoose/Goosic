@@ -4,8 +4,8 @@
 > engineering, UI, release, and troubleshooting context for this repository.
 >
 > Last verified: **2026-07-17**
-> Current app version: **0.4.6**
-> Current `main`: **v0.4.6 glass/theme and memory refinements**
+> Current app version: **0.4.7**
+> Current release candidate: **v0.4.7 playback/library reliability fixes**
 > Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.4.6>
 
 ## 1. New-session quick start
