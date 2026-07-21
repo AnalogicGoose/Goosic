@@ -130,26 +130,42 @@ fn deno_download_url() -> Option<&'static str> {
 
 fn youtube_player_clients(has_js_runtime: bool) -> &'static str {
     if has_js_runtime {
-        // `tv` remains an important bot-check/metadata fallback on connections
-        // where yt-dlp's defaults get LOGIN_REQUIRED. `web_safari` supplies
-        // formats that require challenge solving; only enable it when Deno is
-        // actually installed so a missing runtime cannot make extraction worse.
-        "youtube:player_client=tv,android_vr,web_safari"
+        // The TV client increasingly returns DRM-only formats and adds a full
+        // player request without yielding playable audio. Android VR remains
+        // the lightweight anonymous path; Safari supplies challenge-protected
+        // formats when the managed Deno runtime is available.
+        "youtube:player_client=android_vr,web_safari"
     } else {
-        "youtube:player_client=tv,android_vr"
+        "youtube:player_client=android_vr"
     }
 }
 
 /// Arguments shared by every yt-dlp invocation. Keeping player selection in
 /// one place prevents the metadata resolver and the streaming downloader from
 /// silently using different challenge capabilities.
-pub fn youtube_runtime_args(managed_ytdlp: &Path) -> Vec<OsString> {
+pub fn youtube_runtime_args(
+    managed_ytdlp: &Path,
+    provider: Option<(&Path, &str)>,
+) -> Vec<OsString> {
     let deno = managed_deno_path(managed_ytdlp);
     let has_deno = deno.is_file();
-    let mut args = vec![
-        OsString::from("--extractor-args"),
-        OsString::from(youtube_player_clients(has_deno)),
-    ];
+    let mut args = Vec::new();
+    if let Some((plugin_dir, base_url)) = provider {
+        // Load only the pinned, checksum-verified package. User/global yt-dlp
+        // plugin directories are intentionally excluded from Goosic playback.
+        args.push(OsString::from("--no-plugin-dirs"));
+        args.push(OsString::from("--plugin-dirs"));
+        args.push(plugin_dir.as_os_str().to_owned());
+        args.push(OsString::from("--extractor-args"));
+        args.push(OsString::from("youtube:player_client=mweb"));
+        args.push(OsString::from("--extractor-args"));
+        args.push(OsString::from(format!(
+            "youtubepot-bgutilhttp:base_url={base_url}"
+        )));
+    } else {
+        args.push(OsString::from("--extractor-args"));
+        args.push(OsString::from(youtube_player_clients(has_deno)));
+    }
     if has_deno {
         args.push(OsString::from("--js-runtimes"));
         let mut runtime = OsString::from("deno:");
@@ -197,7 +213,7 @@ pub async fn ensure(app: tauri::AppHandle) {
             // challenge support. Advertise this distinct phase so first-run
             // setup is not mistaken for a hung audio request. The stream path
             // joins the same lock; if the official runtime download fails it
-            // continues with the tv/android_vr fallback instead.
+            // continues with the android_vr fallback instead.
             if program == managed {
                 maybe_self_update(&managed).await;
             }
@@ -209,10 +225,34 @@ pub async fn ensure(app: tauri::AppHandle) {
                     Some("Installing YouTube challenge runtime (Deno)".into()),
                 );
             }
-            if let Err(e) = ensure_deno(&managed, true).await {
-                eprintln!("[ytdlp] managed Deno unavailable (non-fatal): {e}");
+            let deno_ready = match ensure_deno(&managed, true).await {
+                Ok(()) => true,
+                Err(e) => {
+                    eprintln!("[ytdlp] managed Deno unavailable (non-fatal): {e}");
+                    false
+                }
+            };
+            let mut ready_message = None;
+            if deno_ready {
+                if crate::pot_provider::needs_setup(&app) {
+                    emit_state(
+                        &app,
+                        "provider",
+                        Some("Installing managed YouTube PO-token provider".into()),
+                    );
+                }
+                if let Err(error) = crate::pot_provider::ensure(&app, &managed, true).await {
+                    eprintln!("[pot-provider] setup failed; fallback remains available: {error}");
+                    ready_message = Some(format!(
+                        "PO-token provider unavailable; using fallback playback clients: {error}"
+                    ));
+                }
+            } else {
+                ready_message = Some(
+                    "YouTube challenge runtime unavailable; using fallback playback clients".into(),
+                );
             }
-            emit_state(&app, "ready", None);
+            emit_state(&app, "ready", ready_message);
         }
         Err(e) => {
             eprintln!("[ytdlp] setup failed: {e}");
@@ -375,7 +415,7 @@ fn touch_deno_update_stamp(managed: &Path) {
 }
 
 /// Install (or occasionally refresh) Deno beside yt-dlp. This is deliberately
-/// best-effort: the stream command retains tv/android_vr when no runtime is
+/// best-effort: the stream command retains android_vr when no runtime is
 /// available, while a successful atomic install adds web_safari on the next
 /// resolve without restarting Goosic.
 async fn deno_needs_setup(managed_ytdlp: &Path) -> bool {
@@ -467,7 +507,7 @@ async fn ensure_deno(managed_ytdlp: &Path, refresh_existing: bool) -> Result<(),
 }
 
 /// Join first-run Deno setup before resolving a track. Failure is returned to
-/// the caller for logging only; it must continue with tv/android_vr so runtime
+/// the caller for logging only; it must continue with android_vr so runtime
 /// download outages do not disable playback that still works without EJS.
 pub async fn ensure_js_runtime(managed_ytdlp: &Path) -> Result<(), String> {
     ensure_deno(managed_ytdlp, false).await
@@ -671,18 +711,20 @@ async fn maybe_self_update(managed: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{deno_download_url, managed_deno_path, youtube_player_clients};
+    use super::{
+        deno_download_url, managed_deno_path, youtube_player_clients, youtube_runtime_args,
+    };
     use std::path::Path;
 
     #[test]
-    fn js_capable_client_set_keeps_tv_fallback_and_adds_web_safari() {
+    fn js_capable_client_set_avoids_drm_only_tv_formats() {
         assert_eq!(
             youtube_player_clients(true),
-            "youtube:player_client=tv,android_vr,web_safari"
+            "youtube:player_client=android_vr,web_safari"
         );
         assert_eq!(
             youtube_player_clients(false),
-            "youtube:player_client=tv,android_vr"
+            "youtube:player_client=android_vr"
         );
     }
 
@@ -694,6 +736,24 @@ mod tests {
             .file_stem()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name == "deno"));
+    }
+
+    #[test]
+    fn provider_args_select_mweb_and_only_the_managed_plugin() {
+        let args = youtube_runtime_args(
+            Path::new("bin/yt-dlp"),
+            Some((Path::new("pot/plugins"), "http://127.0.0.1:4416")),
+        );
+        let args = args
+            .iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>();
+        assert!(args.iter().any(|arg| arg == "--no-plugin-dirs"));
+        assert!(args.iter().any(|arg| arg == "pot/plugins"));
+        assert!(args.iter().any(|arg| arg == "youtube:player_client=mweb"));
+        assert!(args
+            .iter()
+            .any(|arg| { arg == "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416" }));
     }
 
     #[test]

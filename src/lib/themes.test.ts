@@ -4,14 +4,13 @@ import { getVisualTheme, isVisualThemeId, VISUAL_THEMES } from "@/lib/themes";
 describe("visual theme registry", () => {
   it("keeps every child theme on the shared semantic/material contract", () => {
     for (const theme of VISUAL_THEMES) {
-      expect(theme.light["--brand"]).toBeTruthy();
+      // Dark-only: light mode is deprecated, so themes carry a single dark
+      // token set (no `light` companion).
       expect(theme.dark["--brand"]).toBeTruthy();
       // Glass tint is a shared material; blur/opacity are user-driven and
       // deliberately NOT baked into the per-theme token set.
-      expect(theme.light["--glass-tint-light"]).toBeTruthy();
       expect(theme.dark["--glass-tint-dark"]).toBeTruthy();
-      expect(theme.light["--glass-blur"]).toBeUndefined();
-      expect(theme.light["--radius"]).toBe("34px");
+      expect(theme.dark["--glass-blur"]).toBeUndefined();
       expect(theme.dark["--radius"]).toBe("34px");
     }
   });

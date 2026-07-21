@@ -56,6 +56,35 @@ export function useAudioEngine() {
     const store = usePlaybackStore.getState();
     const current = store.index >= 0 ? store.queue[store.index] : undefined;
     const key = current ? `${current.videoId}:${store.index}` : null;
+    const rateLimited = /HTTP 429|Too Many Requests|not a bot/i.test(message);
+    const unavailable =
+      /HTTP 422|Requested format is not available|DRM protected|video is not available/i.test(
+        message,
+      );
+
+    // These are deterministic server responses, not transient media-element
+    // failures. Repeating them after 400 ms either worsens YouTube's IP limit
+    // or wastes another full extraction on an unavailable track.
+    if (rateLimited) {
+      store.setStatus(
+        "error",
+        "YouTube is limiting this connection, so playback was paused. Wait a few minutes or use another network/VPN.",
+      );
+      store.setPlaying(false);
+      return;
+    }
+    if (unavailable) {
+      consecutiveErrorsRef.current += 1;
+      const hasNext = store.index >= 0 && store.index + 1 < store.queue.length;
+      if (store.playing && hasNext && consecutiveErrorsRef.current <= 3) {
+        store.next();
+      } else {
+        store.setStatus("error", message);
+        store.setPlaying(false);
+      }
+      return;
+    }
+
     if (store.playing && key && retriedTrackRef.current !== key) {
       retriedTrackRef.current = key;
       store.setStatus("loading");
@@ -510,15 +539,22 @@ export function useAudioEngine() {
   useEffect(() => {
     if (status !== "ready") return;
     if (!nextStreamVideoId) return;
-    void prefetchStream(nextStreamVideoId);
-    // Label the prefetched file too — same reasoning as the play path.
-    const st = usePlaybackStore.getState();
-    void saveTrackMeta(
-      nextStreamVideoId,
-      st.index >= 0 && st.index + 1 < st.queue.length
-        ? st.queue[st.index + 1]
-        : undefined,
-    );
+    // Leave breathing room after the active download. YouTube rate-limits
+    // guest sessions by request volume; immediately launching another yt-dlp
+    // process after every play makes 429s much more likely. Ten seconds still
+    // warms normal-length tracks long before they end.
+    const timer = window.setTimeout(() => {
+      void prefetchStream(nextStreamVideoId);
+      // Label the prefetched file too — same reasoning as the play path.
+      const st = usePlaybackStore.getState();
+      void saveTrackMeta(
+        nextStreamVideoId,
+        st.index >= 0 && st.index + 1 < st.queue.length
+          ? st.queue[st.index + 1]
+          : undefined,
+      );
+    }, 10_000);
+    return () => window.clearTimeout(timer);
   }, [status, nextStreamVideoId]);
 
   // Auto-extend the queue with radio tracks when we're near the end, so

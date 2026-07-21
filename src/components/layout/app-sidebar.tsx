@@ -315,7 +315,7 @@ function SidebarPlaylists({
               asChild
               isActive={isPlaylistOn(LIKED_ID)}
               tooltip="Liked songs"
-              className={MENU_BTN_CLS}
+              className={cn(MENU_BTN_CLS, "data-[active=true]:text-brand")}
             >
               <Link to="/playlist/$id" params={{ id: LIKED_ID }}>
                 <HeartIcon className="fill-rose-500 text-rose-500" />
@@ -332,7 +332,10 @@ function SidebarPlaylists({
                     asChild
                     isActive={isPlaylistOn(p.id)}
                     tooltip={p.title}
-                    className={MENU_BTN_CLS}
+                    className={cn(
+                      MENU_BTN_CLS,
+                      "data-[active=true]:text-brand",
+                    )}
                   >
                     <Link to="/playlist/$id" params={{ id: p.id }}>
                       {p.thumbnailUrl ? (

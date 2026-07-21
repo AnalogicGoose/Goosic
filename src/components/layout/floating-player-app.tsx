@@ -6,14 +6,21 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { PinIcon } from "lucide-react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
-import { PLAYER_GLASS_SURFACE_CLASS } from "@/components/ui/glass-surface";
+import {
+  PLAYER_GLASS_SURFACE_CLASS,
+  STATIC_PLAYER_GLASS_SURFACE_CLASS,
+} from "@/components/ui/glass-surface";
 import { PlayerBar } from "@/components/layout/player-bar";
+import { LiquidGlassDefs } from "@/components/layout/liquid-glass-defs";
+import { NowPlayingBackground } from "@/components/layout/now-playing-background";
 import { FloatingPlayerSyncReceiver } from "@/components/layout/floating-player-sync";
 import { initFloatingPlaybackBridge } from "@/lib/store/playback";
 import { initFloatingTrackSourceBridge } from "@/lib/store/track-source";
 import { useLayoutStore } from "@/lib/store/layout";
 import { cn } from "@/lib/utils";
 import { queryClient } from "@/lib/query-client";
+import { isWindowsWebview } from "@/lib/platform";
+import { useLiquidRefractionClass } from "@/lib/store/settings";
 
 // Wire the store's user-facing actions to emit Tauri events instead of
 // mutating local state directly — only the main window's audio engine
@@ -31,16 +38,19 @@ initFloatingTrackSourceBridge();
  * `<PlayerBar variant="floating">`.
  */
 export default function FloatingPlayerApp() {
+  useLiquidRefractionClass();
   const nativeMaterial = new URLSearchParams(window.location.search).get(
     "native-player-material",
   );
   const hasNativeMaterial =
     nativeMaterial === "liquid-glass" || nativeMaterial === "visual-effect";
+  const windowsGlass = isWindowsWebview() && !hasNativeMaterial;
   return (
     <ThemeProvider
       attribute="class"
       defaultTheme="dark"
-      enableSystem
+      // Dark-only, same as the main window (light mode is deprecated).
+      forcedTheme="dark"
       storageKey="ytm-theme"
       disableTransitionOnChange
     >
@@ -53,16 +63,31 @@ export default function FloatingPlayerApp() {
         <TooltipProvider delayDuration={800} skipDelayDuration={0}>
           <div
             className={cn(
-              PLAYER_GLASS_SURFACE_CLASS,
-              "relative flex h-screen w-screen flex-col overflow-hidden rounded-[16px] border",
-              hasNativeMaterial && "native-player-material",
+              "relative h-screen w-screen overflow-hidden rounded-[16px]",
+              hasNativeMaterial ? "bg-transparent" : "bg-background",
             )}
           >
-            <FloatingPlayerSyncReceiver />
-            <FloatingTitleBar />
-            <main className="relative flex-1">
-              <PlayerBar variant="floating" />
-            </main>
+            {windowsGlass ? <NowPlayingBackground /> : null}
+            {windowsGlass ? <LiquidGlassDefs /> : null}
+            <div
+              className={cn(
+                // AppKit supplies genuine native material on macOS. Windows
+                // uses the same dimension-matched SVG player glass as the
+                // main window, over an internal album-derived backdrop;
+                // Linux keeps the conservative static fallback.
+                hasNativeMaterial || windowsGlass
+                  ? PLAYER_GLASS_SURFACE_CLASS
+                  : STATIC_PLAYER_GLASS_SURFACE_CLASS,
+                "relative z-10 flex h-full w-full flex-col overflow-hidden rounded-[16px] border",
+                hasNativeMaterial && "native-player-material",
+              )}
+            >
+              <FloatingPlayerSyncReceiver />
+              <FloatingTitleBar />
+              <main className="relative flex-1">
+                <PlayerBar variant="floating" />
+              </main>
+            </div>
           </div>
         </TooltipProvider>
         <Toaster />

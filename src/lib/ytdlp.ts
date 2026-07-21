@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 
 type YtdlpState = {
-  phase: "downloading" | "runtime" | "ready" | "error";
+  phase: "downloading" | "runtime" | "provider" | "ready" | "error";
   message?: string | null;
 };
 
@@ -12,8 +12,9 @@ const TOAST_ID = "ytdlp-setup";
 
 /**
  * Mount once in AppShell. Kicks off `ensure_ytdlp` on the Rust side
- * (first-run download of the managed yt-dlp binary + throttled
- * self-update) and mirrors its `ytdlp-state` events into toasts.
+ * (first-run download of the managed yt-dlp binary, Deno runtime, and pinned
+ * PO-token provider + throttled self-update) and mirrors its `ytdlp-state`
+ * events into toasts.
  *
  * The listener is registered BEFORE the invoke so the very first
  * "downloading" event can't be missed. On the common path (binary
@@ -45,9 +46,30 @@ export function useYtdlpSetup(): void {
           description:
             "One-time download for current YouTube signature challenges.",
         });
+      } else if (phase === "provider") {
+        sawDownloadRef.current = true;
+        toast.loading("Setting up reliable YouTube playback...", {
+          id: TOAST_ID,
+          duration: Infinity,
+          description:
+            "Installing the pinned managed PO-token provider. This only happens on first setup.",
+        });
       } else if (phase === "ready") {
-        if (sawDownloadRef.current) {
-          sawDownloadRef.current = false;
+        const showedSetup = sawDownloadRef.current;
+        sawDownloadRef.current = false;
+        if (message) {
+          toast.warning("Audio engine ready with fallback playback", {
+            id: TOAST_ID,
+            duration: 8000,
+            description: message,
+            action: {
+              label: "Retry setup",
+              onClick: () => {
+                void invoke("ensure_ytdlp");
+              },
+            },
+          });
+        } else if (showedSetup) {
           toast.success("Audio engine ready", { id: TOAST_ID, duration: 4000 });
         }
       } else if (phase === "error") {

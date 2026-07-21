@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { createConvexRefractionProfile } from "./liquid-glass-defs";
+import {
+  createConvexRefractionProfile,
+  FIGMA_GLASS_PRESET,
+} from "./liquid-glass-defs";
+
+describe("FIGMA_GLASS_PRESET", () => {
+  it("keeps the exposed Active=True optics values exact", () => {
+    expect(FIGMA_GLASS_PRESET).toEqual({
+      refraction: 70,
+      depth: 30,
+      dispersion: 20,
+      splay: 20,
+    });
+  });
+});
 
 describe("createConvexRefractionProfile", () => {
   it("creates a strong edge displacement that settles to neutral inside", () => {

@@ -13,16 +13,11 @@ import {
   PanelRightIcon,
   PanelBottomIcon,
   ExternalLinkIcon,
-  PaletteIcon,
-  SunIcon,
-  MoonIcon,
-  MonitorIcon,
   BugIcon,
   DownloadIcon,
   InfoIcon,
   PowerIcon,
 } from "lucide-react";
-import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -53,11 +48,11 @@ import { openSettings } from "@/lib/store/settings-dialog";
 import { checkForUpdates } from "@/lib/updater";
 import { AboutDialog } from "@/components/layout/about-dialog";
 
-// Caption-bar nav buttons get just an icon-color shift on hover —
-// the default ghost-button square highlight competes visually with
-// the Windows-style min/max/close cells on the right side of the bar.
-const NAV_BTN_CLS =
-  "size-7 text-foreground/65 hover:bg-transparent hover:text-foreground dark:hover:bg-transparent";
+// Caption-bar nav buttons: small circular glass pills (they inherit the
+// shared `.glass-button` material from the Button component). We only tune
+// the sizing and the resting icon colour here; the glass fill + hover
+// brightening come from the base material.
+const NAV_BTN_CLS = "size-7 text-foreground/70 hover:text-foreground";
 
 // Plain-vite dev in a regular browser has no Tauri backend —
 // `getCurrentWindow()` throws on missing `__TAURI_INTERNALS__`, which
@@ -145,7 +140,6 @@ export function TopBar() {
                 Settings
               </DropdownMenuItem>
               <LayoutSubMenu />
-              <ThemeSubMenu />
 
               <DropdownMenuSeparator />
 
@@ -265,41 +259,6 @@ function LayoutSubMenu() {
           <DropdownMenuRadioItem value="floating">
             <ExternalLinkIcon className="size-4" />
             Floating window
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
-  );
-}
-
-function ThemeSubMenu() {
-  const { theme, setTheme } = useTheme();
-  // `theme` is undefined during the very first client render (next-themes
-  // resolves it on mount). Fall back to "system" so the radio group has
-  // a valid value and doesn't briefly render with nothing selected.
-  const value = theme ?? "system";
-  return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger>
-        <PaletteIcon />
-        Theme
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="w-40">
-        <DropdownMenuRadioGroup
-          value={value}
-          onValueChange={(v) => setTheme(v)}
-        >
-          <DropdownMenuRadioItem value="light">
-            <SunIcon className="size-4" />
-            Light
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="dark">
-            <MoonIcon className="size-4" />
-            Dark
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="system">
-            <MonitorIcon className="size-4" />
-            System
           </DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
       </DropdownMenuSubContent>

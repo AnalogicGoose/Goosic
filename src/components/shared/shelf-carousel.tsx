@@ -128,7 +128,7 @@ export function ShelfCarousel({ shelf, action }: Props) {
 
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-3 px-1">
+      <div className="shelf-carousel-header flex items-center justify-between gap-3 px-1">
         <h2 className="truncate text-xl font-semibold tracking-tight">
           {shelf.title}
         </h2>

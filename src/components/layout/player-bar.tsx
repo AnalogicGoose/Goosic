@@ -17,12 +17,14 @@ import {
   Minimize2Icon,
 } from "lucide-react";
 import { QueueBody, QueueToggleButton } from "@/components/layout/queue-panel";
+import { registerLiquidGlassSurface } from "@/components/layout/liquid-glass-defs";
 import {
   LyricsBody,
   LyricsSourceButton,
   useLyricsView,
 } from "@/components/layout/lyrics-view";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
@@ -462,6 +464,20 @@ export function PlayerBar({
   // still false — without this guard, the freshly-launched player
   // shows a spinner instead of the Play icon.
   const loading = status === "loading" && playing;
+  const fullscreenControlsRef = useRef<HTMLDivElement>(null);
+  const refreshFullscreenControlsGlass = useCallback(() => {
+    if (fullscreen && fullscreenControlsRef.current) {
+      registerLiquidGlassSurface(fullscreenControlsRef.current);
+    }
+  }, [fullscreen]);
+
+  useEffect(() => {
+    if (!fullscreen || !fullscreenControlsRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      refreshFullscreenControlsGlass();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [fullscreen, queueOpen, refreshFullscreenControlsGlass]);
 
   // The right-side variant is fixed-positioned in the main app shell.
   // The floating-window variant fills its parent container (the
@@ -471,8 +487,50 @@ export function PlayerBar({
     variant === "right"
       ? "fixed bottom-2 right-2 top-(--titlebar-h) z-10 flex w-[22rem] flex-col rounded-[34px] border"
       : fullscreen
-        ? "absolute inset-0 z-10 flex flex-col bg-background/20 text-foreground"
+        ? "absolute inset-0 z-10 flex flex-col bg-transparent text-foreground"
         : "absolute inset-0 flex flex-col bg-transparent";
+
+  const bottomActions = (
+    <div
+      ref={fullscreen ? fullscreenControlsRef : undefined}
+      className={cn(
+        "flex items-center justify-between gap-2 px-3 pt-2 pb-3",
+        fullscreen &&
+          cn(
+            PLAYER_GLASS_SURFACE_CLASS,
+            "fullscreen-player-controls inset-x-[clamp(2.5rem,9vw,11rem)] bottom-5 z-50 rounded-full px-4 py-2",
+          ),
+      )}
+    >
+      <div className="flex items-center gap-0.5">
+        <LyricsSourceButton state={lyricsState} />
+        <QueueToggleButton
+          open={queueOpen}
+          onToggle={() => setQueueOpen((v) => !v)}
+        />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Autoplay"
+              aria-pressed={autoRadio}
+              onClick={() => setAutoRadio(!autoRadio)}
+              className={cn(autoRadio && "text-brand")}
+            >
+              <RadioIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Autoplay</TooltipContent>
+        </Tooltip>
+        <VolumeControl direction="vertical" />
+      </div>
+      <div className="flex items-center gap-1">
+        {track && <SourceToggle track={track} />}
+        <PlayerMoreMenu track={track} includeSource={false} />
+      </div>
+    </div>
+  );
 
   return (
     // shadcn's SidebarProvider injects a nested TooltipProvider with
@@ -493,11 +551,13 @@ export function PlayerBar({
       >
         {fullscreen && onRequestClose ? (
           <Button
-            variant="ghost"
             size="icon"
             onClick={onRequestClose}
             aria-label="Exit full-screen player"
-            className="absolute right-5 top-5 z-30 rounded-full bg-black/15 backdrop-blur-md hover:bg-black/25"
+            className={cn(
+              "absolute right-5 z-30 rounded-full",
+              queueOpen ? "top-20" : "top-5",
+            )}
           >
             <Minimize2Icon />
           </Button>
@@ -512,16 +572,12 @@ export function PlayerBar({
           in from blank. */}
         <AnimatePresence initial={false} mode="wait">
           {queueOpen ? (
-            <motion.div
+            <div
               key="queue"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.07 }}
               className="flex min-h-0 flex-1 flex-col"
             >
               <QueueBody onClose={() => setQueueOpen(false)} />
-            </motion.div>
+            </div>
           ) : (
             <motion.div
               key="cover"
@@ -529,6 +585,7 @@ export function PlayerBar({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.07 }}
+              onAnimationComplete={refreshFullscreenControlsGlass}
               className={cn(
                 "flex min-h-0 flex-1 flex-col",
                 fullscreen &&
@@ -732,41 +789,7 @@ export function PlayerBar({
           `onGoToArtist` callback emits a Tauri nav event there
           instead of calling `useNavigate` (which would throw without
           a router). */}
-        <div
-          className={cn(
-            "flex items-center justify-between gap-2 px-3 pt-2 pb-3",
-            fullscreen &&
-              "absolute inset-x-[clamp(2.5rem,9vw,11rem)] bottom-5 rounded-full border border-white/10 bg-black/10 px-4 py-2 backdrop-blur-md",
-          )}
-        >
-          <div className="flex items-center gap-0.5">
-            <LyricsSourceButton state={lyricsState} />
-            <QueueToggleButton
-              open={queueOpen}
-              onToggle={() => setQueueOpen((v) => !v)}
-            />
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Autoplay"
-                  aria-pressed={autoRadio}
-                  onClick={() => setAutoRadio(!autoRadio)}
-                  className={cn(autoRadio && "text-brand")}
-                >
-                  <RadioIcon />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">Autoplay</TooltipContent>
-            </Tooltip>
-            <VolumeControl direction="vertical" />
-          </div>
-          <div className="flex items-center gap-1">
-            {track && <SourceToggle track={track} />}
-            <PlayerMoreMenu track={track} includeSource={false} />
-          </div>
-        </div>
+        {fullscreen ? createPortal(bottomActions, document.body) : bottomActions}
       </aside>
     </TooltipProvider>
   );

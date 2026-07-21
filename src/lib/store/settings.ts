@@ -5,9 +5,7 @@ import { persist } from "zustand/middleware";
 import { isWindowsWebview } from "@/lib/platform";
 import {
   clampGlassBlur,
-  clampGlassOpacity,
   GLASS_BLUR_DEFAULT,
-  GLASS_OPACITY_DEFAULT,
   isVisualThemeId,
   type VisualThemeId,
 } from "@/lib/themes";
@@ -30,21 +28,12 @@ type State = {
   /** The semantic visual child theme. Components consume the same token
    *  contract; this value only selects which token set is mounted. */
   visualTheme: VisualThemeId;
-  /** Alpha (0–1) of the shared glass tint every surface reads via
-   *  `--glass-opacity` — the "Frosted glass" slider. 0 = fully transparent
-   *  (frost only), 1 = opaque. See `useGlassOpacity`. */
-  glassOpacity: number;
   /** Backdrop blur radius (px) of the shared glass material, via
    *  `--glass-blur` — the "Glass blur" slider. See `useGlassBlur`. */
   glassBlur: number;
   /** Experimental animated mesh derived from the current cover. When false,
    *  Ambient mode uses the original blurred-cover implementation. */
   dynamicAlbumMesh: boolean;
-  /** Experimental true backdrop refraction on glass surfaces (menus,
-   *  popovers, player). Windows only: Chromium/WebView2 renders SVG filters
-   *  inside `backdrop-filter`; WebKit (macOS) doesn't and keeps the classic
-   *  blur material regardless of this flag. */
-  liquidGlassRefraction: boolean;
   /** System toast on track change while the app is in the background
    *  (see `lib/playback-notifications.ts`). */
   playbackNotifications: boolean;
@@ -75,10 +64,8 @@ type State = {
   markCacheCleaned: () => void;
   setBackground: (v: BackgroundMode) => void;
   setVisualTheme: (v: VisualThemeId) => void;
-  setGlassOpacity: (v: number) => void;
   setGlassBlur: (v: number) => void;
   setDynamicAlbumMesh: (v: boolean) => void;
-  setLiquidGlassRefraction: (v: boolean) => void;
   setPlaybackNotifications: (v: boolean) => void;
   setDiscordRichPresence: (v: boolean) => void;
   setLastfmEnabled: (v: boolean) => void;
@@ -104,10 +91,8 @@ export const useSettingsStore = create<State>()(
       lastCacheCleanAt: 0,
       background: "ambient",
       visualTheme: "default",
-      glassOpacity: GLASS_OPACITY_DEFAULT,
       glassBlur: GLASS_BLUR_DEFAULT,
       dynamicAlbumMesh: true,
-      liquidGlassRefraction: true,
       playbackNotifications: false,
       discordRichPresence: false,
       lastfmEnabled: false,
@@ -120,11 +105,8 @@ export const useSettingsStore = create<State>()(
       markCacheCleaned: () => set({ lastCacheCleanAt: Date.now() }),
       setBackground: (background) => set({ background }),
       setVisualTheme: (visualTheme) => set({ visualTheme }),
-      setGlassOpacity: (v) => set({ glassOpacity: clampGlassOpacity(v) }),
       setGlassBlur: (v) => set({ glassBlur: clampGlassBlur(v) }),
       setDynamicAlbumMesh: (dynamicAlbumMesh) => set({ dynamicAlbumMesh }),
-      setLiquidGlassRefraction: (liquidGlassRefraction) =>
-        set({ liquidGlassRefraction }),
       setPlaybackNotifications: (playbackNotifications) =>
         set({ playbackNotifications }),
       setDiscordRichPresence: (discordRichPresence) =>
@@ -145,24 +127,36 @@ export const useSettingsStore = create<State>()(
     }),
     {
       name: "ytm-settings",
+      version: 1,
+      // Frost opacity used to be persisted as `glassOpacity`. Remove that
+      // retired preference during hydration so existing installs do not keep
+      // carrying an invisible legacy value.
+      migrate: (persisted) => {
+        if (!persisted || typeof persisted !== "object") {
+          return persisted as State;
+        }
+
+        const migrated = { ...(persisted as Record<string, unknown>) };
+        delete migrated.glassOpacity;
+        return migrated as unknown as State;
+      },
       // Old installs may have no visualTheme yet — or a since-retired id
       // (goosic/ocean/sunset/mono). `isVisualThemeId` now only accepts
       // default/modern, so any legacy or corrupted value falls back to the
       // current default rather than blocking hydration.
       merge: (persisted, current) => {
-        const saved = persisted as Partial<State> | undefined;
+        const persistedSettings = {
+          ...((persisted ?? {}) as Record<string, unknown>),
+        };
+        delete persistedSettings.glassOpacity;
+        const saved = persistedSettings as Partial<State>;
         const value = saved?.visualTheme;
-        const savedOpacity = saved?.glassOpacity;
         const savedBlur = saved?.glassBlur;
         return {
           ...current,
-          ...(persisted as Partial<State>),
+          ...saved,
           visualTheme: isVisualThemeId(value) ? value : current.visualTheme,
           // Missing on older installs; clamp anything out of range.
-          glassOpacity:
-            typeof savedOpacity === "number"
-              ? clampGlassOpacity(savedOpacity)
-              : current.glassOpacity,
           glassBlur:
             typeof savedBlur === "number"
               ? clampGlassBlur(savedBlur)
@@ -204,21 +198,21 @@ export function useCloseBehaviorSync(): void {
 }
 
 /**
- * Toggle the `liquid-refract` class on <html> from the persisted experiment.
- * The class upgrades every `.liquid-glass` surface to true backdrop
+ * Add the `liquid-refract` class to <html> on Windows. The class upgrades
+ * every explicit `.glass-material-interactive` surface to true backdrop
  * refraction via the SVG lens filter (see `LiquidGlassDefs` and index.css).
+ * Static glass remains a separate Shadow -> Fill implementation.
  * Windows-only: Chromium renders SVG filters in `backdrop-filter`; WebKit
  * ignores the `url()` term, so macOS/Linux never get the class. Mounted in
  * both AppShell and FloatingPlayerApp — separate JS contexts, same rule.
  */
 export function useLiquidRefractionClass(): void {
-  const enabled = useSettingsStore((s) => s.liquidGlassRefraction);
   useEffect(() => {
     document.documentElement.classList.toggle(
       "liquid-refract",
-      enabled && isWindowsWebview(),
+      isWindowsWebview(),
     );
-  }, [enabled]);
+  }, []);
 }
 
 /**

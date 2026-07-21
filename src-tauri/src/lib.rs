@@ -30,6 +30,7 @@ mod lastfm;
 mod media;
 #[cfg(target_os = "macos")]
 mod native_glass;
+mod pot_provider;
 mod secure_store;
 mod ytdlp;
 
@@ -267,7 +268,7 @@ async fn migrate_to_accounts_layout(app: &tauri::AppHandle) {
         eprintln!("[auth] migrate accounts: write index failed: {e}");
         return;
     }
-    eprintln!("[auth] migrated single cookies.enc into accounts/{new_id}/");
+    eprintln!("[auth] migrated legacy cookie storage into the accounts layout");
 }
 
 fn generate_account_id() -> String {
@@ -1064,7 +1065,7 @@ async fn refresh_active_session(app: tauri::AppHandle) -> Result<bool, String> {
     match refresh_account_cookies(&app, &active).await {
         Ok(()) => Ok(true),
         Err(e) => {
-            eprintln!("[refresh] {active}: {e}");
+            eprintln!("[refresh] active account refresh failed: {e}");
             Err(e)
         }
     }
@@ -2016,7 +2017,13 @@ fn resolve_stream_ytdlp(app: tauri::AppHandle, video_id: String) -> Result<Strin
     let managed = ytdlp::managed_path(&app);
     let mut command = std::process::Command::new(ytdlp::program(&managed));
     command.args(["-j", "-f", "bestaudio", "--no-playlist", "--no-warnings"]);
-    command.args(ytdlp::youtube_runtime_args(&managed));
+    let provider = pot_provider::current_config();
+    command.args(ytdlp::youtube_runtime_args(
+        &managed,
+        provider
+            .as_ref()
+            .map(|config| (config.plugin_dir.as_path(), config.base_url.as_str())),
+    ));
     command.arg(&url);
     // Windows: a console-less GUI process spawning the console-subsystem
     // yt-dlp.exe with default flags makes Windows flash a console window
@@ -2345,6 +2352,16 @@ fn summarize_ytdlp_stderr(stderr: &[u8]) -> String {
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
+        // yt-dlp/provider diagnostics can include per-session credentials.
+        // Drop the entire line instead of attempting partial redaction, which
+        // risks missing a new output format in a future extractor release.
+        .filter(|line| {
+            let lower = line.to_ascii_lowercase();
+            !lower.contains("visitor data")
+                && !lower.contains("visitor_data")
+                && !lower.contains("po_token")
+                && !lower.contains("request body")
+        })
         .collect::<Vec<_>>();
     // The actionable extractor/download error is conventionally last. Keep a
     // little context without returning pages of warnings through localhost.
@@ -2356,6 +2373,28 @@ fn summarize_ytdlp_stderr(stderr: &[u8]) -> String {
         "yt-dlp produced no audio".into()
     } else {
         summary.chars().take(1200).collect()
+    }
+}
+
+/// Preserve actionable YouTube failures as distinct HTTP statuses so the
+/// frontend can avoid immediately repeating a request that cannot succeed.
+/// Retrying a 429 after a few hundred milliseconds only extends the IP block;
+/// retrying a DRM/format failure runs the same expensive extraction twice.
+fn ytdlp_failure_status(detail: &str) -> StatusCode {
+    let detail = detail.to_ascii_lowercase();
+    if detail.contains("http error 429")
+        || detail.contains("too many requests")
+        || detail.contains("confirm you're not a bot")
+    {
+        StatusCode::TOO_MANY_REQUESTS
+    } else if detail.contains("requested format is not available")
+        || detail.contains("drm protected")
+        || detail.contains("only images are available")
+        || detail.contains("video is not available")
+    {
+        StatusCode::UNPROCESSABLE_ENTITY
+    } else {
+        StatusCode::BAD_GATEWAY
     }
 }
 
@@ -2411,12 +2450,19 @@ fn spawn_downloader(
             }
         };
         if let Err(e) = ytdlp::ensure_js_runtime(&srv.ytdlp_bin).await {
-            // Best-effort by contract: tv/android_vr can still resolve many
+            // Best-effort by contract: android_vr can still resolve many
             // tracks, so an unavailable GitHub/Deno download is not itself a
             // playback failure. The selected client args below automatically
             // omit web_safari when the managed runtime is absent.
             eprintln!("[stream] {video_id}: Deno unavailable, using fallback clients: {e}");
         }
+        let provider = match pot_provider::ensure(&srv.app, &srv.ytdlp_bin, false).await {
+            Ok(config) => Some(config),
+            Err(error) => {
+                eprintln!("[pot-provider] unavailable; using fallback clients: {error}");
+                None
+            }
+        };
 
         let url = format!("https://www.youtube.com/watch?v={video_id}");
         let part_path = target_dir.join(format!("{video_id}.part"));
@@ -2451,7 +2497,12 @@ fn spawn_downloader(
             "-o",
             "-",
         ]);
-        cmd.args(ytdlp::youtube_runtime_args(&srv.ytdlp_bin));
+        cmd.args(ytdlp::youtube_runtime_args(
+            &srv.ytdlp_bin,
+            provider
+                .as_ref()
+                .map(|config| (config.plugin_dir.as_path(), config.base_url.as_str())),
+        ));
         cmd.arg(&url);
         // Windows: suppress the console window for the child yt-dlp.exe
         // (see resolve_stream_ytdlp for rationale).
@@ -2781,17 +2832,19 @@ async fn stream_handler(
         }
 
         if !final_path.exists() {
-            eprintln!(
-                "[stream] {video_id}: BAD_GATEWAY — complete but no .webm (elapsed {:.2}s)",
-                t0.elapsed().as_secs_f32()
-            );
             let detail = state
                 .error
                 .lock()
                 .await
                 .clone()
                 .unwrap_or_else(|| "yt-dlp did not produce a playable audio file".into());
-            return (StatusCode::BAD_GATEWAY, detail).into_response();
+            let status = ytdlp_failure_status(&detail);
+            eprintln!(
+                "[stream] {video_id}: {} — complete but no .webm (elapsed {:.2}s)",
+                status.as_u16(),
+                t0.elapsed().as_secs_f32()
+            );
+            return (status, detail).into_response();
         }
         eprintln!(
             "[stream] {video_id}: download finished in {:.2}s",
@@ -2982,10 +3035,10 @@ async fn start_stream_server(
         cover_dir,
         downloads: Arc::new(Mutex::new(HashMap::new())),
         ytdlp_bin,
-        // One slot for whatever's currently playing, one headroom so the
-        // next-track prefetch isn't fully blocked by it — but a burst of
-        // rapid skips still can't spawn more than 2 yt-dlp processes at once.
-        limiter: Arc::new(Semaphore::new(2)),
+        // Serialize extraction. Concurrent player requests from one IP make
+        // YouTube's guest-session rate limit arrive much sooner. The frontend
+        // delays best-effort prefetch so active playback retains priority.
+        limiter: Arc::new(Semaphore::new(1)),
     };
 
     // Per-launch token as an unguessable path prefix. Baked into the base
@@ -3121,7 +3174,7 @@ pub fn run() {
     let port_handle = state.port.clone();
     let token_handle = state.token.clone();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main_window(app);
         }))
@@ -3297,10 +3350,10 @@ pub fn run() {
                     if let Some(active) = idx.active {
                         if account_webview_dir(&refresh_handle, &active).exists() {
                             match refresh_account_cookies(&refresh_handle, &active).await {
-                                Ok(()) => {
-                                    eprintln!("[refresh] renewed snapshot for {active}")
+                                Ok(()) => eprintln!("[refresh] renewed active account snapshot"),
+                                Err(e) => {
+                                    eprintln!("[refresh] active account refresh failed: {e}")
                                 }
-                                Err(e) => eprintln!("[refresh] {active}: {e}"),
                             }
                         }
                     }
@@ -3324,15 +3377,21 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            pot_provider::shutdown_now();
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         audio_mime_from_header, generate_stream_token, stream_location_without_refresh,
-        summarize_ytdlp_stderr,
+        summarize_ytdlp_stderr, ytdlp_failure_status,
     };
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -3418,6 +3477,31 @@ mod tests {
         let summary = summarize_ytdlp_stderr(stderr);
         assert!(summary.contains("ERROR: Sign in to confirm you're not a bot"));
         assert!(!summary.contains("warning one"));
+    }
+
+    #[test]
+    fn resolver_error_summary_drops_session_credentials() {
+        let stderr = b"WARNING: Missing required Visitor Data: secret\nWARNING: po_token=secret\nERROR: HTTP Error 429: Too Many Requests\n";
+        let summary = summarize_ytdlp_stderr(stderr);
+        assert!(!summary.to_ascii_lowercase().contains("visitor"));
+        assert!(!summary.to_ascii_lowercase().contains("po_token"));
+        assert!(summary.contains("HTTP Error 429"));
+    }
+
+    #[test]
+    fn resolver_failures_preserve_retry_semantics() {
+        assert_eq!(
+            ytdlp_failure_status("HTTP Error 429: Too Many Requests"),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            ytdlp_failure_status("ERROR: Requested format is not available"),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            ytdlp_failure_status("ERROR: transient connection reset"),
+            StatusCode::BAD_GATEWAY
+        );
     }
 
     // Guards the security fix (review high #1): the stream server nests all

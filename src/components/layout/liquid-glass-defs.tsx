@@ -4,21 +4,23 @@ import { useSettingsStore } from "@/lib/store/settings";
 import { clampGlassBlur } from "@/lib/themes";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const GLASS_SELECTOR = ".liquid-glass";
+// Only the explicit Active=True material gets the WebView2 lens. Static
+// glass is a separate Shadow -> Fill construction and never registers here.
+const GLASS_SELECTOR = ".glass-material-interactive";
+const LIQUID_GLASS_SURFACE_EVENT = "goosic:register-liquid-glass-surface";
 const AIR_REFRACTIVE_INDEX = 1;
 const PROFILE_SAMPLES = 127;
 
 // Figma Glass preset supplied by the product owner. Keep this as the single
 // optics source of truth for players, menus, popovers, and dialogs.
 export const FIGMA_GLASS_PRESET = {
-  lightAngle: 0,
-  lightIntensity: 0.4,
   refraction: 70,
   depth: 30,
   dispersion: 20,
-  frost: 6,
   splay: 20,
 } as const;
+
+const SMALL_GLASS_FROST_RATIO = 6 / 16;
 
 type RefractionProfile = {
   normalized: Float32Array;
@@ -32,19 +34,33 @@ type SurfaceRegistration = {
   geometry: string | null;
 };
 
-type MapPair = {
+type MaterialMaps = {
   displacement: string;
   maximumDisplacement: number;
 };
 
-const mapCache = new Map<string, MapPair>();
+const mapCache = new Map<string, MaterialMaps>();
 // feImage stretches the vector field to the panel's exact dimensions, so
 // Full-window rasters only waste memory. Bound map resolution and resize
-// history: sixteen worst-case 512-by-512 RGBA maps total roughly 16 MiB.
+// history: sixteen worst-case displacement maps total roughly
+// 16 MiB of raw RGBA data before PNG compression.
 // 512px keeps ultra-wide player maps tall enough for a clean optical edge;
 // small menus remain native-resolution.
 const MAX_MAP_RASTER_SIZE = 512;
 const MAX_CACHED_MAPS = 16;
+
+/**
+ * Lets a surface that mounts inside a fullscreen/portal layer request its
+ * dimension-matched SVG filter directly. MutationObserver remains the normal
+ * path for every other material surface.
+ */
+export function registerLiquidGlassSurface(element: HTMLElement): void {
+  window.dispatchEvent(
+    new CustomEvent<HTMLElement>(LIQUID_GLASS_SURFACE_EVENT, {
+      detail: element,
+    }),
+  );
+}
 
 function convexSquircle(x: number): number {
   const clamped = Math.min(1, Math.max(0, x));
@@ -121,7 +137,11 @@ function sampleProfile(profile: Float32Array, x: number): number {
   return profile[lower] * (1 - mix) + profile[upper] * mix;
 }
 
-function createMaps(width: number, height: number, radius: number): MapPair {
+function createMaps(
+  width: number,
+  height: number,
+  radius: number,
+): MaterialMaps {
   // feImage scales this capped raster back to the exact CSS-pixel size. The
   // radius is scaled with it so the bezel stays physically consistent.
   const rasterScale = Math.min(
@@ -146,7 +166,6 @@ function createMaps(width: number, height: number, radius: number): MapPair {
   if (!displacementContext) {
     throw new Error("Canvas 2D is unavailable for Liquid Glass maps");
   }
-
   const displacementImage = displacementContext.createImageData(
     rasterWidth,
     rasterHeight,
@@ -238,7 +257,7 @@ function getCachedMaps(
   width: number,
   height: number,
   radius: number,
-): MapPair {
+): MaterialMaps {
   const cached = mapCache.get(key);
   if (cached) {
     // Refresh insertion order so the first entry remains the least used.
@@ -275,7 +294,7 @@ function appendFilter(
   id: string,
   width: number,
   height: number,
-  maps: MapPair,
+  maps: MaterialMaps,
   blurLevel: number,
   refractionLevel: number,
 ): void {
@@ -310,21 +329,71 @@ function appendFilter(
     preserveAspectRatio: "none",
     result: "displacement_map",
   });
-  const displacement = svgElement("feDisplacementMap");
-  setAttributes(displacement, {
-    in: "blurred_source",
-    in2: "displacement_map",
-    scale: maps.maximumDisplacement * refractionLevel,
-    xChannelSelector: "R",
-    yChannelSelector: "G",
-    result: "displaced",
+  const baseScale = maps.maximumDisplacement * refractionLevel;
+  const channelSplay =
+    maps.maximumDisplacement *
+    (FIGMA_GLASS_PRESET.dispersion / 100) *
+    (FIGMA_GLASS_PRESET.splay / 100);
+
+  // Figma exposes dispersion and splay as separate Glass-effect values. SVG
+  // has no native chromatic-dispersion primitive, so the faithful web
+  // equivalent is three copies of the same refracted backdrop with slightly
+  // separated displacement scales, then recombine their RGB channels.
+  const appendChannel = (
+    channel: "red" | "green" | "blue",
+    scale: number,
+    matrix: string,
+  ) => {
+    const displaced = svgElement("feDisplacementMap");
+    setAttributes(displaced, {
+      in: "blurred_source",
+      in2: "displacement_map",
+      scale,
+      xChannelSelector: "R",
+      yChannelSelector: "G",
+      result: `${channel}_displaced`,
+    });
+    const isolate = svgElement("feColorMatrix");
+    setAttributes(isolate, {
+      in: `${channel}_displaced`,
+      type: "matrix",
+      values: matrix,
+      result: `${channel}_channel`,
+    });
+    filter.append(displaced, isolate);
+  };
+
+  filter.append(blur, displacementImage);
+  appendChannel(
+    "red",
+    baseScale + channelSplay,
+    "1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0",
+  );
+  appendChannel(
+    "green",
+    baseScale,
+    "0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0",
+  );
+  appendChannel(
+    "blue",
+    Math.max(0, baseScale - channelSplay),
+    "0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0",
+  );
+  const redGreen = svgElement("feBlend");
+  setAttributes(redGreen, {
+    in: "red_channel",
+    in2: "green_channel",
+    mode: "screen",
+    result: "red_green",
   });
-  // The refracted, blurred backdrop IS the output — no saturation lift and
-  // no specular rim. The old 6× saturate blew the backdrop into a vivid,
-  // over-saturated smear; showing true colors reads as clean glass. The
-  // last appended primitive is the filter's result, so `displacement`
-  // (result "displaced") is what paints.
-  filter.append(blur, displacementImage, displacement);
+  const dispersed = svgElement("feBlend");
+  setAttributes(dispersed, {
+    in: "red_green",
+    in2: "blue_channel",
+    mode: "screen",
+    result: "dispersed",
+  });
+  filter.append(redGreen, dispersed);
   defs.append(filter);
 }
 
@@ -381,16 +450,18 @@ export function LiquidGlassDefs() {
         width / 2,
         height / 2,
       );
-      const isPlayer = element.classList.contains("liquid-glass-player");
-      // A single user-controlled blur for every surface (the Glass-blur
-      // slider), baked into the shader here so the refraction path honors it
-      // just like the plain CSS backdrop-filter does. The displacement
-      // (refraction) strength keeps the player/menu distinction.
-      const blurLevel = blurRef.current;
-      const geometry = `${isPlayer ? "player" : "menu"}-${width}x${height}r${Math.round(radius)}b${blurLevel}`;
+      const isSmall = element.classList.contains("glass-material-small");
+      // Figma uses a 6px frost radius for small controls and 16px for both
+      // medium and large panels. Preserve that ratio when the shared slider
+      // changes the regular radius.
+      const blurLevel =
+        blurRef.current * (isSmall ? SMALL_GLASS_FROST_RATIO : 1);
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
-      const refractionLevel = isPlayer ? 1 : 0.7;
+      // createConvexRefractionProfile already consumes Figma's 70% value;
+      // applying another 0.7 multiplier would attenuate it twice.
+      const refractionLevel = 1;
       // Raster maps stay cached in 8px buckets (feImage stretches them the
       // last few pixels), but the filter geometry itself is exact — a bucket
       // rounded below the panel size leaves an unmapped displacement strip.
@@ -405,7 +476,14 @@ export function LiquidGlassDefs() {
       filterSequence += 1;
       const id = `liquid-glass-s${filterSequence}`;
       appendFilter(defs, id, width, height, maps, blurLevel, refractionLevel);
-      element.style.setProperty("--liquid-glass-filter", `url("#${id}")`);
+      const filterValue = `url("#${id}")`;
+      element.style.setProperty("--liquid-glass-filter", filterValue);
+      // WebView2 can stop resolving a custom-property-backed backdrop filter
+      // when a fullscreen scroll compositor is swapped in. Write the exact
+      // generated SVG URL to the real properties as well so Queue cannot
+      // silently fall back to `none`.
+      element.style.setProperty("backdrop-filter", filterValue);
+      element.style.setProperty("-webkit-backdrop-filter", filterValue);
       element.dataset.liquidGlassReady = "true";
       if (registration.filterId) {
         defs.querySelector(`#${CSS.escape(registration.filterId)}`)?.remove();
@@ -439,6 +517,8 @@ export function LiquidGlassDefs() {
         defs.querySelector(`#${CSS.escape(registration.filterId)}`)?.remove();
       }
       element.style.removeProperty("--liquid-glass-filter");
+      element.style.removeProperty("backdrop-filter");
+      element.style.removeProperty("-webkit-backdrop-filter");
       delete element.dataset.liquidGlassReady;
       registrations.delete(element);
     };
@@ -458,6 +538,26 @@ export function LiquidGlassDefs() {
     };
 
     scan(document.body);
+
+    const registerRequestedSurface = (event: Event) => {
+      const element = (event as CustomEvent<HTMLElement>).detail;
+      if (!(element instanceof HTMLElement) || !element.matches(GLASS_SELECTOR))
+        return;
+      const registration = registrations.get(element);
+      if (registration) {
+        // Queue swaps a large compositing subtree below fullscreen controls.
+        // Chromium can drop an unchanged backdrop-filter during that swap, so
+        // force a new SVG filter id whenever this surface requests one.
+        registration.geometry = null;
+        scheduleMeasure(element);
+        return;
+      }
+      register(element);
+    };
+    window.addEventListener(
+      LIQUID_GLASS_SURFACE_EVENT,
+      registerRequestedSurface,
+    );
 
     // Re-run every live surface's measurement (geometry reset forces a fresh
     // filter) so a Glass-blur slider change repaints the shader immediately.
@@ -479,6 +579,10 @@ export function LiquidGlassDefs() {
     return () => {
       remeasureAllRef.current = null;
       mutationObserver.disconnect();
+      window.removeEventListener(
+        LIQUID_GLASS_SURFACE_EVENT,
+        registerRequestedSurface,
+      );
       for (const [element, registration] of registrations) {
         registration.resizeObserver.disconnect();
         if (registration.frame !== null)
@@ -487,6 +591,8 @@ export function LiquidGlassDefs() {
           defs.querySelector(`#${CSS.escape(registration.filterId)}`)?.remove();
         }
         element.style.removeProperty("--liquid-glass-filter");
+        element.style.removeProperty("backdrop-filter");
+        element.style.removeProperty("-webkit-backdrop-filter");
         delete element.dataset.liquidGlassReady;
       }
       registrations.clear();

@@ -103,14 +103,11 @@ export function JumpToCurrentButton({ tracks }: Props) {
   return createPortal(
     <Button
       size="sm"
-      className="fixed z-20 mx-auto w-fit rounded-full border border-sidebar-border text-sidebar-foreground shadow-lg transition-[left,right,bottom] duration-150 ease-linear"
+      className="fixed z-20 mx-auto w-fit rounded-full text-sidebar-foreground transition-[left,right,bottom] duration-150 ease-linear"
       style={{
         left,
         right,
         bottom,
-        backgroundColor: "var(--surface)",
-        backdropFilter: "blur(8px)",
-        WebkitBackdropFilter: "blur(8px)",
       }}
       onClick={() => {
         const el = document.querySelector<HTMLElement>(

@@ -81,6 +81,9 @@ md5 = "0.7"
 # manages it beside yt-dlp so current YouTube JavaScript challenges can be
 # solved on end-user machines that do not already have a JS runtime installed.
 zip = { version = "4.6", default-features = false, features = ["deflate-flate2"] }
+# Verifies the pinned PO-provider plugin/source archives before executing any
+# downloaded code. See `src/pot_provider.rs`.
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38"

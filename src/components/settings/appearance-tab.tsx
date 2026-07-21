@@ -1,6 +1,4 @@
-import { useTheme } from "next-themes";
 import {
-  BlendIcon,
   ChevronDownIcon,
   DropletsIcon,
   LayoutDashboardIcon,
@@ -27,12 +25,6 @@ import {
   type VisualThemeId,
 } from "@/lib/themes";
 
-const THEME_OPTIONS = [
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
-  { value: "system", label: "System" },
-];
-
 const LAYOUT_OPTIONS: { value: LayoutMode; label: string }[] = [
   { value: "right", label: "Side card" },
   { value: "bottom", label: "Bottom bar" },
@@ -45,11 +37,8 @@ const BACKGROUND_OPTIONS: { value: BackgroundMode; label: string }[] = [
 ];
 
 export function AppearanceTab() {
-  const { theme, setTheme } = useTheme();
   const visualTheme = useSettingsStore((s) => s.visualTheme);
   const setVisualTheme = useSettingsStore((s) => s.setVisualTheme);
-  const glassOpacity = useSettingsStore((s) => s.glassOpacity);
-  const setGlassOpacity = useSettingsStore((s) => s.setGlassOpacity);
   const glassBlur = useSettingsStore((s) => s.glassBlur);
   const setGlassBlur = useSettingsStore((s) => s.setGlassBlur);
   const layoutMode = useLayoutStore((s) => s.mode);
@@ -107,27 +96,6 @@ export function AppearanceTab() {
           }
         />
         <SettingRow
-          icon={BlendIcon}
-          title="Frosted glass"
-          description="How opaque the glass surfaces are — drag toward transparent for more frost, toward solid for more cover."
-          control={
-            <div className="flex w-44 items-center gap-3">
-              <Slider
-                value={[Math.round(glassOpacity * 100)]}
-                min={0}
-                max={100}
-                step={1}
-                aria-label="Frosted glass opacity"
-                onValueChange={([v]) => setGlassOpacity(v / 100)}
-                className="min-w-0 flex-1"
-              />
-              <span className="w-9 text-right text-xs font-medium tabular-nums text-muted-foreground">
-                {Math.round(glassOpacity * 100)}%
-              </span>
-            </div>
-          }
-        />
-        <SettingRow
           icon={DropletsIcon}
           title="Glass blur"
           description="How much the glass frosts the content behind it. Higher is softer; zero shows a crisp backdrop."
@@ -146,21 +114,6 @@ export function AppearanceTab() {
                 {glassBlur}px
               </span>
             </div>
-          }
-        />
-        <SettingRow
-          icon={PaletteIcon}
-          title="Theme"
-          description="Choose light or dark, or follow your OS preference."
-          control={
-            <SegmentedControl
-              // `theme` is undefined during the very first render
-              // (next-themes resolves it on mount) — fall back to
-              // "system" so the control never renders empty.
-              value={theme ?? "system"}
-              onChange={setTheme}
-              options={THEME_OPTIONS}
-            />
           }
         />
         <SettingRow

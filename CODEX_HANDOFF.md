@@ -1,9 +1,9 @@
-# Goosic — Complete Codex Handoff
+# Goosic â€” Complete Codex Handoff
 
 > **Read this file first in every new Codex session.** It is the durable product,
 > engineering, UI, release, and troubleshooting context for this repository.
 >
-> Last verified: **2026-07-17**
+> Last verified: **2026-07-21**
 > Current app version: **0.4.7**
 > Current release candidate: **v0.4.7 playback/library reliability fixes**
 > Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.4.6>
@@ -23,7 +23,7 @@ Before changing anything:
    media controls, login, or the floating player.
 6. Before publishing, follow the full release checklist in section 12.
 
-The user speaks informally and often says “bro.” Keep communication friendly,
+The user speaks informally and often says â€œbro.â€ Keep communication friendly,
 direct, and outcome-first. When they ask to implement something, make the
 change and verify it rather than stopping for unnecessary clarification.
 
@@ -52,7 +52,7 @@ gh ... -R AnalogicGoose/YTubic
 ```
 
 There has also been a historical `v0.3.2` tag collision between remotes. A
-normal tag fetch may report “would clobber existing tag.” Do not force-rewrite
+normal tag fetch may report â€œwould clobber existing tag.â€ Do not force-rewrite
 published tags. New releases must always use a new version.
 
 ## 3. Product intent
@@ -161,99 +161,101 @@ window automatically appears in the other.
 
 ### Frontend entry and routing
 
-- `src/main.tsx` — React entry; suppresses WebView2's native context menu.
-- `src/App.tsx` — theme/query providers and main-vs-floating window split.
-- `src/routes/__root.tsx` — route root.
-- `src/routes/index.tsx` — Home.
-- `src/routes/explore.tsx` — Explore.
-- `src/routes/search.tsx` — Search and filters.
-- `src/routes/library.tsx` — Library.
-- `src/routes/artist.$id.tsx` — Artist detail.
-- `src/routes/album.$id.tsx` — Album detail.
-- `src/routes/playlist.$id.tsx` — Playlist detail.
+- `src/main.tsx` â€” React entry; suppresses WebView2's native context menu.
+- `src/App.tsx` â€” theme/query providers and main-vs-floating window split.
+- `src/routes/__root.tsx` â€” route root.
+- `src/routes/index.tsx` â€” Home.
+- `src/routes/explore.tsx` â€” Explore.
+- `src/routes/search.tsx` â€” Search and filters.
+- `src/routes/library.tsx` â€” Library.
+- `src/routes/artist.$id.tsx` â€” Artist detail.
+- `src/routes/album.$id.tsx` â€” Album detail.
+- `src/routes/playlist.$id.tsx` â€” Playlist detail.
 - `src/routes/charts.tsx`, `moods.tsx`, `moods_.$id.tsx`, and
-  `new-releases.tsx` — discovery routes.
-- `src/routeTree.gen.ts` — generated router tree; do not hand-edit.
+  `new-releases.tsx` â€” discovery routes.
+- `src/routeTree.gen.ts` â€” generated router tree; do not hand-edit.
 
 ### Layout and playback UI
 
-- `src/components/layout/app-shell.tsx` — main layout coordinator; mounts
+- `src/components/layout/app-shell.tsx` â€” main layout coordinator; mounts
   background, sidebar, content, player layouts, sync hooks, and update checks.
-- `src/components/layout/top-bar.tsx` — custom title bar and app menu.
-- `src/components/layout/app-sidebar.tsx` — navigation, playlists, accounts,
+- `src/components/layout/top-bar.tsx` â€” custom title bar and app menu.
+- `src/components/layout/app-sidebar.tsx` â€” navigation, playlists, accounts,
   settings, and update banner.
-- `src/components/layout/player-bar.tsx` — right-side player.
-- `src/components/layout/player-bar-bottom.tsx` — bottom overlay player.
-- `src/components/layout/floating-player-app.tsx` — separate compact player.
-- `src/components/layout/floating-player-sync.tsx` — main/floating state bridge.
-- `src/components/layout/player-more-menu.tsx` — player action menu.
-- `src/components/layout/queue-panel.tsx` — queue/history surface.
-- `src/components/layout/lyrics-view.tsx` — synced lyrics and lyric scrolling.
-- `src/components/layout/now-playing-background.tsx` — dynamic album mesh and
+- `src/components/layout/player-bar.tsx` â€” right-side player.
+- `src/components/layout/player-bar-bottom.tsx` â€” bottom overlay player.
+- `src/components/layout/floating-player-app.tsx` â€” separate compact player.
+- `src/components/layout/floating-player-sync.tsx` â€” main/floating state bridge.
+- `src/components/layout/player-more-menu.tsx` â€” player action menu.
+- `src/components/layout/queue-panel.tsx` â€” queue/history surface.
+- `src/components/layout/lyrics-view.tsx` â€” synced lyrics and lyric scrolling.
+- `src/components/layout/now-playing-background.tsx` â€” dynamic album mesh and
   legacy blurred-cover fallback.
-- `src/components/layout/update-banner.tsx` — updater progress/action surface.
+- `src/components/layout/update-banner.tsx` â€” updater progress/action surface.
 
 ### Shared content components
 
-- `src/components/shared/shelf-card.tsx` — song/video/album/playlist/artist
+- `src/components/shared/shelf-card.tsx` â€” song/video/album/playlist/artist
   cards and their click behavior.
-- `src/components/shared/shelf-carousel.tsx` — desktop-friendly horizontal
+- `src/components/shared/shelf-carousel.tsx` â€” desktop-friendly horizontal
   shelves, navigation arrows, edge fading, and scrolling.
-- `src/components/shared/track-list.tsx` — track table/list rendering.
-- `src/components/shared/track-context-menu.tsx` — track actions and submenus.
-- `src/components/shared/artist-links.tsx` — reusable clickable artist names.
-- `src/components/shared/thumbnail.tsx` — image sizing/high-resolution helpers.
+- `src/components/shared/track-list.tsx` â€” track table/list rendering.
+- `src/components/shared/track-context-menu.tsx` â€” track actions and submenus.
+- `src/components/shared/artist-links.tsx` â€” reusable clickable artist names.
+- `src/components/shared/thumbnail.tsx` â€” image sizing/high-resolution helpers.
 
 ### UI primitives and visual system
 
-- `src/index.css` — global tokens, the 34px radius system, scrollbars, album
+- `src/index.css` â€” global tokens, the 34px radius system, scrollbars, album
   mesh, lyrics effects, carousel masks, and other global behavior.
-- `src/components/ui/glass-surface.ts` — canonical glass material class strings.
-- `src/components/ui/context-menu.tsx` — root and portaled submenu styling.
-- `src/components/ui/dropdown-menu.tsx` — dropdown and submenu styling.
-- `src/components/ui/popover.tsx` — shared popover glass treatment.
+- `src/components/ui/glass-surface.ts` â€” canonical glass material class strings.
+- `src/components/ui/context-menu.tsx` â€” root and portaled submenu styling.
+- `src/components/ui/dropdown-menu.tsx` â€” dropdown and submenu styling.
+- `src/components/ui/popover.tsx` â€” shared popover glass treatment.
 - Other primitives live under `src/components/ui/`.
 
 ### Data, state, and playback
 
-- `src/lib/innertube/` — InnerTube clients, parsers, entity queries, mutations,
+- `src/lib/innertube/` â€” InnerTube clients, parsers, entity queries, mutations,
   radio, and shared data types.
-- `src/lib/audio-engine.ts` — playback lifecycle, media state, Discord updates,
+- `src/lib/audio-engine.ts` â€” playback lifecycle, media state, Discord updates,
   timing, and stream changes.
-- `src/lib/stream.ts` — local stream URL coordination and cache metadata.
-- `src/lib/ytdlp.ts` — managed yt-dlp/Deno lifecycle hooks and setup UI.
-- `src/lib/query-client.ts` — query caching/persistence budgets.
-- `src/lib/store/playback.ts` — queue, history, repeat, shuffle, autoplay, and
+- `src/lib/stream.ts` â€” local stream URL coordination and cache metadata.
+- `src/lib/ytdlp.ts` â€” managed yt-dlp/Deno lifecycle hooks and setup UI.
+- `src/lib/query-client.ts` â€” query caching/persistence budgets.
+- `src/lib/store/playback.ts` â€” queue, history, repeat, shuffle, autoplay, and
   playback actions. The floating window uses a remote-control bridge.
-- `src/lib/store/layout.ts` — `right`, `bottom`, and `floating` player layout.
-- `src/lib/store/settings.ts` — persisted settings and Rust sync hooks,
+- `src/lib/store/layout.ts` â€” `right`, `bottom`, and `floating` player layout.
+- `src/lib/store/settings.ts` â€” persisted settings and Rust sync hooks,
   including the selected visual child theme.
-- `src/lib/themes.ts` — the visual-theme registry and token applier. Themes
+- `src/lib/themes.ts` â€” the visual-theme registry and token applier. Themes
   are data-driven children of one shared visual contract; components should
   consume semantic Tailwind tokens/material variables instead of branching on
   theme IDs. The current selector offers Default and Modern, which share the
   same neutral tokens but select the classic or modern bottom-player layout.
   The choice persists to the `visualTheme` field in `ytm-settings`; the shared
-  glass opacity and blur settings apply across the player, menus, and sidebar.
-- `src/lib/store/track-source.ts` — song/video source pairing and selection.
-- `src/lib/updater.ts` and `src/lib/store/update.ts` — update state machine.
-- `src/lib/lyrics/` — lyrics providers, matching, and LRC parsing.
-- `src/lib/lastfm.ts` and `lastfm-scrobbler.ts` — frontend Last.fm behavior.
+  glass blur setting applies across the player, menus, and sidebar.
+- `src/lib/store/track-source.ts` â€” song/video source pairing and selection.
+- `src/lib/updater.ts` and `src/lib/store/update.ts` â€” update state machine.
+- `src/lib/lyrics/` â€” lyrics providers, matching, and LRC parsing.
+- `src/lib/lastfm.ts` and `lastfm-scrobbler.ts` â€” frontend Last.fm behavior.
 
 ### Native backend
 
-- `src-tauri/src/lib.rs` — main Tauri application, local proxy, account and
+- `src-tauri/src/lib.rs` â€” main Tauri application, local proxy, account and
   cookie handling, cache commands, windows, tray, and invoke registration.
-- `src-tauri/src/main.rs` — release console suppression and `goosic_lib::run()`.
-- `src-tauri/src/media.rs` — Windows SMTC/media controls.
-- `src-tauri/src/discord.rs` — Discord IPC worker and Tauri commands.
-- `src-tauri/src/lastfm.rs` — Last.fm authentication, signing, scrobble queue,
+- `src-tauri/src/main.rs` â€” release console suppression and `goosic_lib::run()`.
+- `src-tauri/src/media.rs` â€” Windows SMTC/media controls.
+- `src-tauri/src/discord.rs` â€” Discord IPC worker and Tauri commands.
+- `src-tauri/src/lastfm.rs` â€” Last.fm authentication, signing, scrobble queue,
   love sync, and retry.
-- `src-tauri/src/ytdlp.rs` — managed yt-dlp binary and Deno runtime.
-- `src-tauri/src/appid.rs` — Windows AppUserModelID.
-- `src-tauri/build.rs` — Tauri build plus safe Last.fm credential injection.
-- `src-tauri/tauri.conf.json` — product/version, windows, CSP, bundle, updater.
-- `src-tauri/capabilities/default.json` — Tauri permissions/capabilities.
+- `src-tauri/src/ytdlp.rs` â€” managed yt-dlp binary and Deno runtime.
+- `src-tauri/src/pot_provider.rs` â€” pinned bgutil PO-token provider install,
+  loopback lifecycle, validation, health checks, and fallback coordination.
+- `src-tauri/src/appid.rs` â€” Windows AppUserModelID.
+- `src-tauri/build.rs` â€” Tauri build plus safe Last.fm credential injection.
+- `src-tauri/tauri.conf.json` â€” product/version, windows, CSP, bundle, updater.
+- `src-tauri/capabilities/default.json` â€” Tauri permissions/capabilities.
 
 ### Playback runtime contract
 
@@ -269,8 +271,24 @@ window automatically appears in the other.
   replacement. Deno is MIT-licensed and comes from `denoland/deno` releases.
 - Deno refresh is best-effort and capped to once every 90 days. If GitHub or
   the runtime download is unavailable, playback continues with yt-dlp's
-  `tv,android_vr` client fallback. With Deno ready, `web_safari` is added for
+  `android_vr` client fallback. With Deno ready, `web_safari` is added for
   formats that require JavaScript challenge solving.
+- Goosic manages upstream `bgutil-ytdlp-pot-provider` **v1.3.1** at runtime.
+  Both the plugin and source ZIP are pinned by SHA-256, installed atomically
+  under app data, and never updated to an unchecked latest release. Managed
+  Deno performs the frozen production dependency install and runs the server.
+- The audited provider entrypoint is patched to bind only `127.0.0.1`, starts
+  on a random port, and must answer `/ping` with the pinned version before
+  yt-dlp can use it. The active path disables ambient plugin directories,
+  points yt-dlp at a dedicated directory containing only the verified ZIP,
+  selects `mweb`, and passes the loopback provider URL. Provider setup is
+  exposed through the `ytdlp-state` `provider` phase.
+- Provider failure is nonfatal: Goosic retains the anonymous
+  `android_vr/web_safari` resolver, restarts a crashed provider on the one
+  existing playback retry, preserves the 429 cooldown, and never removes a
+  playable cache entry because provider setup is unavailable. Account cookies,
+  generated tokens, Visitor Data, request bodies, and account identifiers must
+  never be passed to yt-dlp or written to logs.
 - The local stream URL is preflighted with a one-byte Range request before it
   reaches `HTMLAudioElement`. This lets resolver HTTP failures retain yt-dlp's
   diagnostic instead of collapsing into "no supported source". The media
@@ -383,13 +401,13 @@ the content/album background remains visible beneath it.
 - **macOS 26 (Tahoe) WKWebView black-window trap (found 2026-07-14):** putting
   `border-radius` + `overflow: hidden` on `#root` (the `native-rounded-window`
   clip) makes WKWebView's compositor drop the entire window's output. The app
-  keeps running — JS executes, modules load, audio streams — but the window
+  keeps running â€” JS executes, modules load, audio streams â€” but the window
   paints solid black (or, with `transparent: true`, garbled tiny content).
   Therefore `usesRoundedNativeWindow()` in `src/lib/platform.ts` is
   **Linux-only**. macOS needs no CSS clip: AppKit rounds decorated windows
   natively, and the floating player gets its 16px radius from
   `native_glass.rs`. The macOS main window also ships `transparent: false`
-  with an opaque `backgroundColor` — do not reintroduce the CSS root clip or
+  with an opaque `backgroundColor` â€” do not reintroduce the CSS root clip or
   window transparency on macOS without verifying on a Tahoe machine.
 - The standalone macOS floating player is an AppKit material host: native
   Liquid Glass on macOS 26+, with native visual-effect fallback on older macOS.
@@ -432,7 +450,7 @@ than copied source code.
 The new ambient background is enabled by default and can be disabled in:
 
 ```text
-Settings → Experiments → Dynamic album mesh
+Settings â†’ Experiments â†’ Dynamic album mesh
 ```
 
 The preference is `dynamicAlbumMesh` in `src/lib/store/settings.ts`. When off,
@@ -441,12 +459,12 @@ the app returns to the legacy blurred-cover background.
 Implementation contract:
 
 1. Load the current high-resolution cover.
-2. Sample it into a 48×48 canvas.
+2. Sample it into a 48Ã—48 canvas.
 3. Quantize pixels, rank colors by actual frequency, and select up to five
    sufficiently distinct colors.
 4. Keep sampled RGB values as they are. **Do not invent, hue-shift, or boost
    synthetic colors.** A white/red/black cover must not become pink/purple.
-5. Weight a deterministic 6×6 grid by the colors' observed frequency.
+5. Weight a deterministic 6Ã—6 grid by the colors' observed frequency.
 6. Animate grid drift and cell breathing using transforms/opacity.
 7. Crossfade track changes and honor `prefers-reduced-motion`.
 8. If CORS/canvas sampling fails, use the legacy blurred artwork instead of a
@@ -454,7 +472,7 @@ Implementation contract:
 
 ### Critical packaged-build fix
 
-Release `v0.3.5` exposed the raw 6×6 squares across the whole window even
+Release `v0.3.5` exposed the raw 6Ã—6 squares across the whole window even
 though dev mode looked correct. The packaged WebView2 compositor excluded the
 grid sibling layer from the large nested `backdrop-filter`.
 
@@ -472,60 +490,88 @@ frost overlay keeps only a smaller finishing backdrop blur.
 alone will not catch the regression. Any mesh change must be checked with a
 production/Tauri build.
 
-## 8b. Liquid-glass material and Windows refraction experiment
+## 8b. Figma Liquid Glass materials and Windows refraction
 
-All menus, popovers, dropdowns, and player surfaces share one material:
-`GLASS_SURFACE_CLASS` in `src/components/ui/glass-surface.ts`, backed by the
-`.liquid-glass` class in `src/index.css` (user-controlled blur + saturation +
-outline + drop shadow — the user explicitly removed inset specular/glow
-highlights; do not add those CSS inset shadows back). The opacity and blur
-settings apply to every shared glass surface, including the sidebar.
+The source of truth is Figma page `GLASSS` (`49:40801`) in the BBTOV file. Its
+`Active=True` and `Active=False` variants are deliberately separate materials:
 
-On top of that, **Windows only** gets true backdrop refraction as an
-experiment (Settings → Experiments → "Liquid glass refraction",
-`liquidGlassRefraction` in `src/lib/store/settings.ts`, default on):
+- **Interactive** (`Active=True`) composes `Fill + Shadow` below `Glass Effect`.
+  The outer shell owns geometry and clipping; `::before` owns the luminosity
+  fill, outline, side light, and drop shadow; `::after` owns the glass-effect
+  inner shadows and small-control interaction light. Only this variant may use
+  backdrop blur, SVG refraction, RGB dispersion, or pointer lighting.
+- **Static** (`Active=False`) composes `Shadow` below `Fill`. It has no glass
+  effect, backdrop blur, refraction, dispersion, or dynamic light. Its separate
+  pseudo layers reproduce the Figma outline/side-light stack and multiply fill.
+- Small materials use the Figma 6px frost radius and compact shadow recipe.
+  Medium/large materials use a 16px frost radius and their heavier shadow
+  recipe. The user Glass blur preference scales both values at the same 6:16
+  ratio instead of flattening the two Figma sizes into one blur.
+- Tinted interactive controls keep Figma's order and blend modes: Fill + Shadow,
+  White Backing, the four-paint Tint stack (`plus-darker`, `overlay`,
+  `saturation`, `normal`), then Glass Effect. Chromium's standardized blend
+  modes are used directly; no legacy red/black gradient fallback remains.
 
-- `useLiquidRefractionClass()` toggles `liquid-refract` on `<html>` only
-  when `isWindowsWebview()` — Chromium/WebView2 is the only engine that
-  renders SVG filters inside `backdrop-filter`. WebKit (macOS) ignores
-  `backdrop-filter: url()` entirely ([WebKit bug 245510]), so macOS always
-  keeps the classic blur material and the Experiments row is hidden there.
-- The lens engine lives in
-  `src/components/layout/liquid-glass-defs.tsx`. It independently implements
-  the Kube article's convex-squircle/Snell-law pipeline: a 127-sample radial
-  profile, rounded-rectangle vector field, 8-bit red/green displacement map,
-  and SVG blur/displacement chain.
-  A MutationObserver + ResizeObserver gives every live menu/player its own
-  dimension-matched filter; fixed backdrop-filter images do not size
-  themselves in Chromium. Detached portaled menus are unregistered.
-- Refraction maps cap their longest raster edge at 512px, immediately release
-  temporary canvas buffers, and use a 16-entry LRU. Keep those bounds: the old
-  unbounded 1024px cache retained every resize geometry and could grow the
-  WebView2 renderer into multiple gigabytes. Do not restore the unused
-  specular PNG; the active filter never consumed it.
-- The shared Glass blur setting drives the Gaussian blur inside the Windows
-  SVG shader. Player refraction remains level 1; menus/popovers use 0.7 for
-  legibility. Shared tint opacity is controlled by the Frosted-glass setting.
-- The SVG host is mounted in AppShell for the main document. The floating player
-  deliberately does not mount it: that separate WebView uses the classic static
-  `blur(26px) saturate(1.9)` glass instead of duplicating the runtime SVG maps.
-- CSS: `.liquid-refract .liquid-glass` in `src/index.css`.
-- Verified in the real Windows WebView2 dev app on 2026-07-14: a 918×106
-  bottom player received a 920×104 filter at 73.33px displacement, and a live
-  224×254 song context menu received a separate 224×256 filter. The compositor
-  screenshot showed the expected moving/bent content behind the player.
+`glassSurfaceClass()` in `src/components/ui/glass-surface.ts` is the canonical
+typed material API. It accepts `variant: "interactive" | "static"` and
+`scale: "small" | "medium" | "large"`; the exported player, menu, and dialog
+constants are built from it. Default/destructive buttons use interactive small
+glass, secondary/outline buttons use static small glass, and ghost/link buttons
+remain flat so controls nested inside a glass surface do not create glass on
+glass. Menus, popovers, dialogs, sidebar, and players reuse these primitives;
+do not rebuild their material stack locally.
+
+Windows WebView2 gets the complete interactive renderer by default:
+
+- `useLiquidRefractionClass()` adds `liquid-refract` to `<html>` only when
+  `isWindowsWebview()`. There is no separate experiment preference. WebKit
+  ignores SVG URLs in `backdrop-filter`, so macOS keeps the CSS fallback in the
+  main WebView while the standalone player uses native AppKit Liquid Glass on
+  macOS 26+.
+- `src/components/layout/liquid-glass-defs.tsx` registers only
+  `.glass-material-interactive` elements. Its dimension-matched SVG filters
+  implement the Figma preset (70% refraction, 30 depth, 25% intensity, -60Â°
+  20% dispersion, 20% splay) with a 127-sample
+  convex-squircle/Snell-law map and
+  separately displaced RGB channels. CSS adds one masked 1px directional rim
+  using the supplied 157deg white gradient; there are no other CSS fills,
+  shadows, specular fallbacks, or pointer-light layers.
+- A MutationObserver + ResizeObserver gives every live surface its own filter;
+  detached portals are unregistered. Maps cap their longest raster edge at
+  512px, release temporary canvas buffers immediately, and use a 16-entry LRU.
+  Fullscreen player controls are portaled to `document.body`, request a fresh
+  filter after Queue switches, and write the generated SVG URL directly to
+  both backdrop-filter properties. The portal is required because WebView2
+  otherwise places Queue's accelerated scroll layer above a sibling backdrop
+  sampler even when that sibling has a higher CSS z-index.
+  Keep these bounds: the former unbounded 1024px cache could grow the WebView2
+  renderer into multiple gigabytes.
+- The main SVG host is mounted once in AppShell. On Windows the standalone
+  floating-player WebView mounts its own host and an internal album-derived
+  backdrop, allowing the interactive SVG material to refract WebView pixels
+  without exposing the desktop through the transparent window. macOS continues
+  to use native `NSGlassEffectView`/`NSVisualEffectView`; Linux stays static.
+- CSS selectors are rooted at `.glass-material-interactive` and
+  `.glass-material-static`. Never broaden the SVG selector to `.liquid-glass`,
+  or static surfaces will incorrectly acquire the interactive effects.
+
+The Figma hierarchy, exact exposed paints/effects, computed CSS layers, dynamic
+registration, and representative sidebar/dialog/menu/button surfaces were
+re-verified in Chromium on 2026-07-20. Any compositor change must still be
+checked in a production/Tauri build because packaged WebView2 behavior can
+differ from Vite dev mode.
 
 ## 8c. Background GPU saver (minimized/hidden windows)
 
 `useWindowHidden()` in `src/hooks/use-window-hidden.ts` reports when the main
 window is minimized or hidden to tray (document.visibilitychange +
-`tauri://resize` → `isMinimized()`). AppShell unmounts `NowPlayingBackground`
+`tauri://resize` â†’ `isMinimized()`). AppShell unmounts `NowPlayingBackground`
 while hidden, killing the album mesh's continuously animating blur stack so a
 backgrounded app costs near-zero GPU while audio keeps playing. The standalone
 floating-player WebView never mounts `NowPlayingBackground` or `LiquidGlassDefs`:
 it retains the existing components and classic static web glass, avoiding a
 second animated mesh and runtime refraction compositor. Do not "optimize" the
-main window into opacity/visibility toggles — the compositor keeps animating
+main window into opacity/visibility toggles â€” the compositor keeps animating
 hidden layers; unmounting is the point.
 
 The hidden Windows account session-keeper sets WebView2's supported memory
@@ -555,7 +601,7 @@ pnpm tauri dev
 
 to get the full debug app and dev icon.
 
-When adding user-facing strings, use “Goosic,” not “YTubic.” Historical names
+When adding user-facing strings, use â€œGoosic,â€ not â€œYTubic.â€ Historical names
 may remain in compatibility-only technical identifiers, environment variables,
 localStorage keys, repository paths, and the Tauri identifier. Do not rename
 those casually because it can break stored user data or integrations.
@@ -661,7 +707,7 @@ this production build is mandatory even if `pnpm tauri dev` looks correct.
 
 ### Commit, push, and trigger
 
-Only stage the intended work. When the user explicitly says “push all,” the
+Only stage the intended work. When the user explicitly says â€œpush all,â€ the
 whole inspected worktree is in scope.
 
 ```powershell
@@ -692,7 +738,7 @@ macOS jobs are green and all expected assets are in the public release.
 
 Use **Node 20 or 22**, matching CI (`node-version: 20` in the workflows).
 **Node 24 breaks `pnpm dev` / `pnpm tauri dev`:** Vite hangs silently before
-printing anything — importing `@tanstack/router-plugin/vite` deadlocks inside
+printing anything â€” importing `@tanstack/router-plugin/vite` deadlocks inside
 Node 24's ESM/CJS module evaluation, so Tauri loops forever on
 "Waiting for your frontend dev server to start on http://localhost:1420/".
 Verified 2026-07-14 on macOS with Node v24.14.1 (hangs) vs Node v22.23.1 (works).
@@ -783,7 +829,7 @@ macOS.
 
 The macOS login follows the native pattern proven by Kaset: an embedded
 `WKWebView` uses a Safari 17/macOS user agent and Google's YouTube desktop
-continuation URL (`www.youtube.com/signin` → `music.youtube.com`). Do not reuse
+continuation URL (`www.youtube.com/signin` â†’ `music.youtube.com`). Do not reuse
 the Windows Chrome user agent on macOS; Google rejects that mismatched embedded
 identity as an insecure browser. The login and hidden session keeper share the
 same persistent per-account WebKit data directory, and captured cookies are
@@ -810,7 +856,7 @@ Minimum visual matrix:
 - Home, Search, Library, Album, Artist, and Playlist routes.
 - Dynamic album mesh on and off.
 - A mostly white cover and a dark/saturated cover.
-- Window resize at the 900×600 minimum and a large desktop viewport.
+- Window resize at the 900Ã—600 minimum and a large desktop viewport.
 
 ## 15. Known warnings and traps
 
@@ -823,7 +869,7 @@ These were present and non-blocking at the `v0.3.6` release:
 - Vite warns that the main bundle is over 500 kB.
 - Vite warns that `innertube/album.ts` is both statically and dynamically
   imported.
-- Git often prints LF→CRLF conversion warnings on Windows; `git diff --check`
+- Git often prints LFâ†’CRLF conversion warnings on Windows; `git diff --check`
   should still pass.
 - GitHub Actions currently warns that Node.js 20 actions are being forced onto
   Node.js 24. Releases still succeed, but workflow action versions should be
@@ -882,49 +928,56 @@ persisted and synchronized across native windows.
 
 ## 18. Recent release history
 
-- `v0.4.6` — adds the shared configurable glass material to the sidebar,
+- `v0.4.6` â€” adds the shared configurable glass material to the sidebar,
   prevents native image/link dragging, bounds WebView2 refraction memory, and
   lowers the hidden authenticated session keeper's Windows memory target.
-- `v0.4.5` — Figma Glass preset across menus/player, complete pixel-matched
+- `v0.4.5` â€” Figma Glass preset across menus/player, complete pixel-matched
   frames, capped WebView2 refraction, immersive player mode, and lower-cost
   floating-player WebView.
-- `v0.4.4` — macOS native window/login improvements, native Liquid Glass
+- `v0.4.4` â€” macOS native window/login improvements, native Liquid Glass
   floating player, and cross-platform UI polish.
-- `v0.4.3` — adds a universal Apple Silicon/Intel macOS DMG and updater
+- `v0.4.3` â€” adds a universal Apple Silicon/Intel macOS DMG and updater
   artifact, plus native Keychain-backed account-cookie encryption. The initial
   macOS build is ad-hoc signed until Apple Developer credentials are provided.
-- `v0.4.2` — bundles the complete GStreamer media framework into the Linux
+- `v0.4.2` â€” bundles the complete GStreamer media framework into the Linux
   AppImage and verifies required plugins in GitHub Actions, fixing the packaged
   WebKit process crash caused by missing `appsink`/`autoaudiosink`.
-- `v0.4.1` / `ef4bff1` — added the Linux DMABUF renderer safeguard. The
+- `v0.4.1` / `ef4bff1` â€” added the Linux DMABUF renderer safeguard. The
   initially failed Linux job succeeded on retry and published all Linux
   assets, but this AppImage predates the GStreamer media-framework fix.
-- `v0.4.0` / `65a2b34` — first public Linux AppImage/deb/rpm release. Its
+- `v0.4.0` / `65a2b34` â€” first public Linux AppImage/deb/rpm release. Its
   AppImage reproduced a missing-GStreamer WebKit crash on CachyOS/KDE.
-- `v0.3.6` / `60de5f0` — fixed album mesh squares in packaged WebView2 builds
+- `v0.3.6` / `60de5f0` â€” fixed album mesh squares in packaged WebView2 builds
   by directly blurring the mesh source.
-- `v0.3.5` / `482059a` — Goosic branding launch, icon set, Apple-inspired glass
+- `v0.3.5` / `482059a` â€” Goosic branding launch, icon set, Apple-inspired glass
   menus/player, dynamic album mesh experiment, Discord app migration, clipping
   and spacing updates. This build had the release-only raw mesh-grid bug and
   should not be recommended.
-- `v0.3.4` / `274040c` — previous stable release baseline.
-- `v0.3.3` / `d076f97` — signed automatic updater enabled.
+- `v0.3.4` / `274040c` â€” previous stable release baseline.
+- `v0.3.3` / `d076f97` â€” signed automatic updater enabled.
 
 ## 19. Current handoff state
 
 At the time this document was last refreshed:
 
 - The unreleased working tree hardens playback against current YouTube
-  challenges with managed Deno, preserves resolver diagnostics through a
+  challenges with managed Deno and the pinned managed bgutil PO-token provider
+  v1.3.1. The provider is checksum-verified, installed atomically, bound only
+  to loopback, health/version checked, and automatically falls back to the
+  existing anonymous clients without sharing account cookies. Playback also
+  preserves resolver diagnostics through a
   one-byte preflight, validates cached containers, and fixes token-preserving
-  refresh retries. It also drains library continuations fail-closed for cache
+  refresh retries. yt-dlp work is serialized, next-track prefetch waits ten
+  seconds, DRM-only TV client extraction is excluded, and HTTP 429/DRM
+  failures bypass the harmful immediate retry. It also drains library
+  continuations fail-closed for cache
   cleanup, scopes playlist parsing away from suggestions, supports exact
   per-entry playlist removal, validates lyrics provider metadata, and repairs
-  the collapsed-sidebar Library hit target. The app version remains `0.4.6`
+  the collapsed-sidebar Library hit target. The app version remains `0.4.7`
   until an explicit release is prepared.
 - `v0.4.6` is public with Windows, Linux, and universal macOS artifacts. It
   adds shared sidebar glass, Default/Modern bottom-player layouts, global glass
-  opacity/blur controls, native drag prevention, and lower WebView2 memory use.
+  material controls, native drag prevention, and lower WebView2 memory use.
 - `v0.4.5` introduced the Figma Glass preset,
   pixel-exact menu filters, capped refraction/dispersion, immersive player
   mode, and floating-player GPU safeguards. It also includes the Safari-
@@ -934,15 +987,20 @@ At the time this document was last refreshed:
   (`NSVisualEffectView` fallback on older releases), plus the related UI polish
   and performance safeguards. It has no Apple certificate/notarization
   credentials yet, so macOS remains ad-hoc signed.
-- The Windows Liquid Glass experiment now uses dimension-matched Figma-style
-  refraction/specular/dispersion filters with a safe WebView2 scale. Real
-  WebView2 player, context-menu, Queue, and Lyrics checks passed.
+- The Liquid Glass implementation now mirrors the BBTOV Figma `GLASSS` page's
+  explicit material hierarchy. Interactive and static variants share typed
+  primitives but retain separate layer stacks; only interactive surfaces get
+  blur, dimension-matched refraction, and RGB dispersion. Dialogs, menus,
+  sidebar, players,
+  and button variants use the same compositing contract, with safe WebView2
+  raster/cache bounds preserved.
 - The modular visual-theme foundation is now in place. Appearance exposes
   Default and Modern styles backed by `src/lib/themes.ts`; they share one
   neutral semantic component/material contract and select the classic or
-  modern bottom-player layout. Shared opacity and blur controls drive the
-  player, menus, and sidebar through `ytm-settings`. Future styles should be
-  added as registry children rather than copied component CSS.
+  modern bottom-player layout. The shared blur control drives the player,
+  menus, and sidebar through `ytm-settings`; the retired frosted-opacity value
+  is removed from persisted settings during migration. Future styles should
+  be added as registry children rather than copied component CSS.
 
 When this snapshot becomes stale, update this section, the header version, and
 the recent release history as part of the next release.

@@ -6,24 +6,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Goosic</title>
     <script>
-      // Resolve and apply the persisted theme class before first paint to
-      // avoid a light-mode flash while next-themes hydrates. Mirrors the
-      // ThemeProvider config in src/App.tsx (storageKey, default).
-      (function () {
-        try {
-          var t = localStorage.getItem("ytm-theme") || "dark";
-          var resolved =
-            t === "system"
-              ? window.matchMedia("(prefers-color-scheme: dark)").matches
-                ? "dark"
-                : "light"
-              : t;
-          document.documentElement.classList.add(resolved);
-          document.documentElement.style.colorScheme = resolved;
-        } catch (_) {
-          document.documentElement.classList.add("dark");
-        }
-      })();
+      // The app is dark-only (light mode is deprecated — see the
+      // `forcedTheme="dark"` ThemeProvider in src/App.tsx). Assert the dark
+      // class before first paint so there's never a light flash while
+      // next-themes hydrates.
+      document.documentElement.classList.add("dark");
+      document.documentElement.style.colorScheme = "dark";
     </script>
   </head>
 

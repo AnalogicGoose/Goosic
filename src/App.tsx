@@ -12,7 +12,7 @@ import { routeTree } from "@/routeTree.gen";
 import { isFloatingPlayerWindow } from "@/lib/floating-player";
 import FloatingPlayerApp from "@/components/layout/floating-player-app";
 import { useSettingsStore } from "@/lib/store/settings";
-import { useGlassBlur, useGlassOpacity, useVisualTheme } from "@/lib/themes";
+import { useGlassBlur, useVisualTheme } from "@/lib/themes";
 
 const router = createRouter({
   routeTree,
@@ -29,10 +29,8 @@ declare module "@tanstack/react-router" {
 
 export default function App() {
   const visualTheme = useSettingsStore((state) => state.visualTheme);
-  const glassOpacity = useSettingsStore((state) => state.glassOpacity);
   const glassBlur = useSettingsStore((state) => state.glassBlur);
   useVisualTheme(visualTheme);
-  useGlassOpacity(glassOpacity);
   useGlassBlur(glassBlur);
 
   // The same Vite bundle is loaded in both windows; the standalone
@@ -45,7 +43,11 @@ export default function App() {
     <ThemeProvider
       attribute="class"
       defaultTheme="dark"
-      enableSystem
+      // Light mode is deprecated — the app is dark-only. `forcedTheme`
+      // pins the class on <html> regardless of any persisted/system
+      // preference, so every `dark:` utility and `.dark`-scoped rule
+      // stays active and no light styling is ever reachable.
+      forcedTheme="dark"
       storageKey="ytm-theme"
       disableTransitionOnChange
     >

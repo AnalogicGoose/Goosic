@@ -234,7 +234,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <TopBar />
           <div className="relative flex min-h-0 flex-1">
             <AppSidebar />
-            {/* In `right` mode we reserve 23rem on the right for the
+            {/* The right player overlays the page instead of reserving a
                 floating player card — but only when a track is
                 actually loaded; the empty state shouldn't carve out
                 dead space. `bottom` and `floating` follow the same
@@ -242,7 +242,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div
               className={cn(
                 "relative z-10 flex min-h-0 min-w-0 flex-1 flex-col",
-                mode === "right" && hasTrack && "pr-[23rem]",
+                mode === "right" && hasTrack && "right-player-overlay",
               )}
             >
               {/* Route entity header (playlist / album / artist).
