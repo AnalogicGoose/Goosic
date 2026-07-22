@@ -38,6 +38,19 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.5.1",
+    date: "July 2026",
+    sections: [
+      {
+        heading: "Fixes",
+        items: [
+          "Fixed Goosic closing itself on Linux the moment you played a track.",
+          "Fixed macOS staying on a loading spinner while the music was already playing.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.5.0",
     date: "July 2026",
     sections: [

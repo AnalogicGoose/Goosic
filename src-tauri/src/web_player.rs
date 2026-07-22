@@ -25,6 +25,11 @@ const BRIDGE_VERSION: u8 = 2;
 const BRIDGE_HEADER: &str = "x-goosic-bridge";
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 const HEALTH_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Observer samples to wait for the page's video identity before trusting a
+/// sample without it. The observer samples every 250ms, so this is about three
+/// seconds — long enough for a slow player API to appear, short enough that an
+/// engine which never exposes one does not strand the interface in loading.
+const IDENTITY_GRACE_SAMPLES: u32 = 12;
 const IDENTITY_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[cfg(any(target_os = "windows", test))]
@@ -55,6 +60,10 @@ struct Inner {
     suppress_ended_until_content_playing: bool,
     last_sequence: Option<u64>,
     terminal_emitted: bool,
+    /// Consecutive samples whose video identity the page did not expose. Bounds
+    /// the identity gate so an engine without a reachable player API cannot
+    /// hold the interface in a loading state for the whole track.
+    unidentified_samples: u32,
     last_heartbeat: Option<Instant>,
     identity_generation: u64,
     identity_result: Option<bool>,
@@ -244,18 +253,30 @@ async fn bridge_state(
     }
     let actual_matches_requested =
         actual_video_matches_requested(payload.actual_video_id.as_deref(), &inner.video_id);
+    let identity_unknown = payload
+        .actual_video_id
+        .as_deref()
+        .map_or(true, |actual| actual.is_empty());
+    inner.unidentified_samples = if identity_unknown {
+        inner.unidentified_samples.saturating_add(1)
+    } else {
+        0
+    };
     if !payload.advertisement
         && !terminal_pending
         && !inner.terminal_emitted
-        && payload
-            .actual_video_id
-            .as_deref()
-            .map_or(true, |actual| actual.is_empty())
+        && identity_unknown
+        && inner.unidentified_samples <= IDENTITY_GRACE_SAMPLES
     {
         // Do not authorize an actionable content sample until the official
-        // player's video identity is observable. Keep reporting heartbeats so
-        // health remains accurate; the frontend's bounded startup timeout
-        // handles a page whose player API never becomes available.
+        // player's video identity is observable.
+        //
+        // The grace bound matters: some engines never expose the player API,
+        // and an unbounded gate reported buffering for the entire track, so the
+        // interface sat in a loading state while audio played correctly. After
+        // the grace period the sample is trusted on its own terms — the page was
+        // navigated to exactly this track's watch URL, and identity is only a
+        // corroboration of that.
         payload.ready = false;
         payload.playing = false;
         payload.buffering = true;
@@ -491,10 +512,17 @@ fn observer_script(bridge_url: &str) -> String {
         const id = data?.video_id || data?.videoId;
         if (typeof id === 'string' && id) return id;
       }}
-      return null;
-    }} catch {{
-      return null;
-    }}
+    }} catch {{}}
+    // The player API is not reachable on every engine: WKWebView and WebKitGTK
+    // can leave `playerApi` undefined even while playback is healthy, which
+    // used to leave identity permanently unknown. YouTube Music keeps `?v=` in
+    // its own address in step with whatever it is playing, including when its
+    // autoplay queue moves on, so the page's URL is a reliable second source.
+    try {{
+      const fromLocation = new URL(location.href).searchParams.get('v');
+      if (typeof fromLocation === 'string' && fromLocation) return fromLocation;
+    }} catch {{}}
+    return null;
   }};
   try {{
     if (navigator.mediaSession?.setActionHandler) {{
@@ -990,9 +1018,6 @@ fn configure_background_window(window: &tauri::WebviewWindow) -> Result<(), Stri
     window
         .set_skip_taskbar(true)
         .map_err(|error| format!("exclude playback window from taskbar: {error}"))?;
-    window
-        .set_ignore_cursor_events(true)
-        .map_err(|error| format!("disable playback window input: {error}"))?;
 
     // A mapped GTK surface is required for reliable WebKitGTK media lifecycle.
     // Make the native host fully transparent before mapping it. X11 also
@@ -1015,6 +1040,16 @@ fn configure_background_window(window: &tauri::WebviewWindow) -> Result<(), Stri
     window
         .show()
         .map_err(|error| format!("activate hidden playback window: {error}"))?;
+
+    // Strictly after the surface is mapped. Tao services this request with
+    // `gtk_widget_get_window(...).unwrap()`, and that returns NULL until the
+    // widget is realized — so asking before `show()` panicked. That panic runs
+    // inside a glib dispatch callback, where unwinding is not allowed, so it
+    // aborted the whole process the first time a track was played instead of
+    // surfacing as an error. Keep this last.
+    window
+        .set_ignore_cursor_events(true)
+        .map_err(|error| format!("disable playback window input: {error}"))?;
     Ok(())
 }
 
@@ -1128,6 +1163,7 @@ async fn clear_player_state(state: &WebPlayerState) {
     inner.suppress_ended_until_content_playing = false;
     inner.last_sequence = None;
     inner.terminal_emitted = false;
+    inner.unidentified_samples = 0;
     inner.last_heartbeat = None;
 }
 
@@ -1502,6 +1538,7 @@ pub async fn load(
         inner.suppress_ended_until_content_playing = false;
         inner.last_sequence = None;
         inner.terminal_emitted = false;
+        inner.unidentified_samples = 0;
         inner.last_heartbeat = None;
     }
 
@@ -1739,6 +1776,9 @@ mod tests {
         );
         assert!(script.contains("Object.defineProperty(window, '__goosicPlaybackSession'"));
         assert!(script.contains("Object.freeze({ generation, videoId: requestedVideoId })"));
+        // WKWebView and WebKitGTK can leave `playerApi` undefined while playing
+        // normally, so identity must have a second source.
+        assert!(script.contains("new URL(location.href).searchParams.get('v')"));
     }
 
     #[test]
@@ -1767,7 +1807,17 @@ mod tests {
         assert!(script.contains("pendingContentEndedPageMoved"));
         assert!(script.contains("pendingContentEndedSawAd || pendingContentEndedPageMoved"));
         // An advertisement must never be mistaken for the page auto-advancing.
-        assert!(script.contains("!lastObservedAd &&\n      !suppressEndedUntilContentPlaying &&"));
+        // Matched as separate tokens rather than one multi-line slice: this
+        // file is rewritten with CRLF on Windows, which silently breaks any
+        // assertion that spans a newline.
+        let gate = script
+            .split("const pageAdvancedPastRequest")
+            .nth(1)
+            .and_then(|rest| rest.split(';').next())
+            .expect("observer must gate the auto-advance terminal");
+        assert!(gate.contains("!lastObservedAd"));
+        assert!(gate.contains("!suppressEndedUntilContentPlaying"));
+        assert!(gate.contains("observedRequestedContent"));
         // The page's own pick must be silenced at the source, not merely reported.
         assert!(script.contains(
             "if (finished && media && !ad && !lastObservedAd && !actualMatchesRequested && !media.paused)"

@@ -974,6 +974,25 @@ The release workflow verifies `appsink`/`autoaudiosink` on the build host and
 checks for `libgstapp.so`, `libgstautodetect.so`, and `libgstlibav.so` inside
 the final AppImage. Do not remove these checks as an optimization.
 
+**GTK realization order (found 2026-07-22, aborted every v0.5.0 Linux play).**
+`configure_background_window`'s Linux path must call
+`set_ignore_cursor_events(true)` **after** `window.show()`, and it must stay
+last. Tao services that request with `gtk_widget_get_window(...).unwrap()`, and
+`gtk_widget_get_window` returns NULL until the widget is realized. The hidden
+playback window is built `visible(false)`, so asking before `show()` unwrapped
+`None` — inside a glib dispatch callback, where unwinding is forbidden, so the
+process aborted with SIGABRT rather than returning an error. It reproduced the
+first time a track was played, because that is when the window is created. The
+same function backs the account-verification window, so the ordering protects
+both. Windows and macOS are unaffected: neither uses GTK realization, and their
+`cfg` blocks legitimately call it before `show()`.
+
+This whole function is `cfg(target_os = "linux")` and therefore **cannot be
+compile-checked from a Windows or macOS dev box** — `cargo check` there skips
+it entirely. The Ubuntu release job is the first real compile. Prefer changes
+that reuse calls already present in the file over introducing new `gdk`/`cairo`
+API surface that no local check can validate.
+
 Building an AppImage locally on Arch/CachyOS has a separate `linuxdeploy`
 `strip`/`.relr.dyn` incompatibility. See
 `docs/linux-appimage-local-build-workaround.md`; it does not apply to the
