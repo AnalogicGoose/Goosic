@@ -38,6 +38,26 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.5.2",
+    date: "July 2026",
+    sections: [
+      {
+        heading: "Linux",
+        items: [
+          "Fixed playback on Linux never being detected: the song played while Goosic sat on a loading spinner, timed out, restarted the track, and then reported an error.",
+          "The ambient background is far smoother on Linux, where it used to make the whole window crawl.",
+          "Known issue: a stray YouTube Music window can appear in Alt-Tab while a track plays. It is harmless and playback is unaffected.",
+        ],
+      },
+      {
+        heading: "Elsewhere",
+        items: [
+          "Settings now shows which version of Goosic you are running, with a button to check for updates.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.5.1",
     date: "July 2026",
     sections: [

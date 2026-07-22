@@ -201,13 +201,17 @@ pub fn bridge_router(app: tauri::AppHandle, state: WebPlayerState) -> Router {
         .with_state((app, state))
 }
 
+fn trusted_bridge_origin(headers: &HeaderMap) -> Option<&HeaderValue> {
+    headers.get("origin").filter(|value| {
+        matches!(
+            value.to_str(),
+            Ok("https://music.youtube.com") | Ok("https://www.youtube.com")
+        )
+    })
+}
+
 fn trusted_bridge_request(headers: &HeaderMap) -> bool {
-    headers
-        .get("origin")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|origin| {
-            origin == "https://music.youtube.com" || origin == "https://www.youtube.com"
-        })
+    trusted_bridge_origin(headers).is_some()
         && headers
             .get(BRIDGE_HEADER)
             .and_then(|value| value.to_str().ok())
@@ -217,10 +221,23 @@ fn trusted_bridge_request(headers: &HeaderMap) -> bool {
 async fn bridge_state(
     State((app, state)): State<(tauri::AppHandle, WebPlayerState)>,
     headers: HeaderMap,
-    Json(mut payload): Json<PlaybackStateEvent>,
+    Json(payload): Json<PlaybackStateEvent>,
 ) -> StatusCode {
-    if !trusted_bridge_request(&headers)
-        || payload.version != BRIDGE_VERSION
+    if !trusted_bridge_request(&headers) {
+        return StatusCode::FORBIDDEN;
+    }
+    apply_state_event(&app, &state, payload).await
+}
+
+/// Validate and publish one observer envelope. Every transport shares this:
+/// the loopback HTTP route and, on Linux, the secure custom scheme. Callers
+/// must have already established that the request came from a trusted origin.
+async fn apply_state_event(
+    app: &tauri::AppHandle,
+    state: &WebPlayerState,
+    mut payload: PlaybackStateEvent,
+) -> StatusCode {
+    if payload.version != BRIDGE_VERSION
         || !payload.position.is_finite()
         || !payload.duration.is_finite()
         || !payload.volume.is_finite()
@@ -313,7 +330,16 @@ async fn bridge_identity(
     headers: HeaderMap,
     Json(payload): Json<IdentityStateEvent>,
 ) -> StatusCode {
-    if !trusted_bridge_request(&headers) || payload.version != BRIDGE_VERSION {
+    if !trusted_bridge_request(&headers) {
+        return StatusCode::FORBIDDEN;
+    }
+    apply_identity_event(&state, payload).await
+}
+
+/// Record the one identity boolean a probe document may report. Shared by the
+/// loopback route and the Linux custom scheme, as [`apply_state_event`] is.
+async fn apply_identity_event(state: &WebPlayerState, payload: IdentityStateEvent) -> StatusCode {
+    if payload.version != BRIDGE_VERSION {
         return StatusCode::FORBIDDEN;
     }
 
@@ -327,6 +353,116 @@ async fn bridge_identity(
     // the waiter arms, avoiding the lost-wakeup behavior of `notify_waiters`.
     state.identity_notify.notify_one();
     StatusCode::NO_CONTENT
+}
+
+/// Linux-only transport for the observer bridge.
+///
+/// WebKitGTK refuses to load an `http://127.0.0.1` subresource from the
+/// official page's HTTPS document: the observer's `fetch` is blocked as mixed
+/// content before it leaves the page, so not one sample reaches the loopback
+/// server. Playback is audible while React never sees `ready`, times the track
+/// out, and tears the WebPlayer down mid-song. Chromium and WKWebView treat
+/// loopback as a trustworthy origin, so only Linux needs a second route out of
+/// the document.
+///
+/// A custom URI scheme is that route. wry registers it with WebKit's security
+/// manager as a *secure* scheme, which is precisely what lifts the
+/// mixed-content block, and the request keeps its method, headers, and body —
+/// so the envelope and every check applied to it stay identical to the HTTP
+/// route's. Do not "simplify" this back to the loopback URL on Linux.
+#[cfg(target_os = "linux")]
+pub const BRIDGE_SCHEME: &str = "goosicbridge";
+
+/// Mirrors the loopback router's `DefaultBodyLimit`.
+#[cfg(target_os = "linux")]
+const BRIDGE_BODY_LIMIT: usize = 16 * 1024;
+
+/// Address the observer and identity probe post their envelopes to. `route` is
+/// `state` or `identity`; `port` addresses the loopback server off Linux.
+pub fn bridge_endpoint(port: u16, token: &str, route: &str) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = port;
+        format!("{BRIDGE_SCHEME}://bridge/{token}/web-player/{route}")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        format!("http://127.0.0.1:{port}/{token}/web-player/{route}")
+    }
+}
+
+/// Answer one custom-scheme bridge request.
+///
+/// Applies the same gates the loopback router does — trusted origin, the
+/// bridge header, the per-launch secret in the path, POST only, and the 16 KiB
+/// envelope limit — plus one the HTTP route cannot express: the playback
+/// WebView is the only webview allowed to reach this scheme.
+#[cfg(target_os = "linux")]
+pub async fn serve_bridge_scheme(
+    app: &tauri::AppHandle,
+    state: &WebPlayerState,
+    webview_label: &str,
+    token: &str,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let status = bridge_scheme_status(app, state, webview_label, token, &request).await;
+    let builder = tauri::http::Response::builder().status(status);
+    // The document is cross-origin to this scheme, so its `fetch` resolves —
+    // and the observer only learns a terminal event landed — when the response
+    // opts that origin in. An untrusted caller is refused without one.
+    let builder = match trusted_bridge_origin(request.headers()) {
+        Some(origin) => builder
+            .header("access-control-allow-origin", origin.clone())
+            .header("vary", "Origin"),
+        None => builder,
+    };
+    builder.body(Vec::new()).unwrap_or_else(|_| {
+        let mut response = tauri::http::Response::new(Vec::new());
+        *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+        response
+    })
+}
+
+#[cfg(target_os = "linux")]
+async fn bridge_scheme_status(
+    app: &tauri::AppHandle,
+    state: &WebPlayerState,
+    webview_label: &str,
+    token: &str,
+    request: &tauri::http::Request<Vec<u8>>,
+) -> StatusCode {
+    if token.is_empty()
+        || webview_label != PLAYER_LABEL
+        || request.method() != Method::POST
+        || !trusted_bridge_request(request.headers())
+        || request.body().len() > BRIDGE_BODY_LIMIT
+    {
+        return StatusCode::FORBIDDEN;
+    }
+    let Some(route) = bridge_scheme_route(request.uri().path(), token) else {
+        return StatusCode::FORBIDDEN;
+    };
+    match route {
+        "state" => match serde_json::from_slice(request.body()) {
+            Ok(payload) => apply_state_event(app, state, payload).await,
+            Err(_) => StatusCode::BAD_REQUEST,
+        },
+        "identity" => match serde_json::from_slice(request.body()) {
+            Ok(payload) => apply_identity_event(state, payload).await,
+            Err(_) => StatusCode::BAD_REQUEST,
+        },
+        _ => StatusCode::NOT_FOUND,
+    }
+}
+
+/// Strip the secret prefix the loopback router expresses as a `nest`, leaving
+/// the route name. `None` means the request did not carry this launch's token.
+#[cfg(any(target_os = "linux", test))]
+fn bridge_scheme_route<'a>(path: &'a str, token: &str) -> Option<&'a str> {
+    path.strip_prefix('/')?
+        .strip_prefix(token)?
+        .strip_prefix("/web-player/")
+        .filter(|route| !route.is_empty())
 }
 
 fn observer_script(bridge_url: &str) -> String {
@@ -1595,14 +1731,52 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        actual_video_matches_requested, control_script, gate_ended_event, heartbeat_is_fresh,
-        is_unexpected_track, load_state_script, observer_script, playback_url, sequence_is_fresh,
-        trusted_navigation, wait_for_identity_result, WebPlayerState, HEALTH_HEARTBEAT_TIMEOUT,
+        actual_video_matches_requested, bridge_endpoint, bridge_scheme_route, control_script,
+        gate_ended_event, heartbeat_is_fresh, is_unexpected_track, load_state_script,
+        observer_script, playback_url, sequence_is_fresh, trusted_navigation,
+        wait_for_identity_result, WebPlayerState, HEALTH_HEARTBEAT_TIMEOUT,
         WINDOWS_WS_EX_APPWINDOW, WINDOWS_WS_EX_NOACTIVATE, WINDOWS_WS_EX_TOOLWINDOW,
     };
 
     #[cfg(any(target_os = "linux", test))]
     use super::linux_uses_x11_backend;
+
+    /// Whatever transport the platform uses, the address the observer is given
+    /// must be the one the bridge's own secret gate accepts.
+    #[test]
+    fn bridge_endpoint_carries_the_route_past_the_secret_gate() {
+        let endpoint = bridge_endpoint(1234, "s3cret", "state");
+        let path = endpoint
+            .parse::<tauri::Url>()
+            .expect("endpoint is a URL")
+            .path()
+            .to_string();
+        assert_eq!(bridge_scheme_route(&path, "s3cret"), Some("state"));
+    }
+
+    #[test]
+    fn bridge_scheme_route_rejects_foreign_or_malformed_paths() {
+        assert_eq!(
+            bridge_scheme_route("/s3cret/web-player/identity", "s3cret"),
+            Some("identity")
+        );
+        // A different launch's secret, and a prefix that merely starts with it.
+        assert_eq!(
+            bridge_scheme_route("/other/web-player/state", "s3cret"),
+            None
+        );
+        assert_eq!(
+            bridge_scheme_route("/s3cretly/web-player/state", "s3cret"),
+            None
+        );
+        // The secret alone authorizes nothing without a named route.
+        assert_eq!(bridge_scheme_route("/s3cret/web-player/", "s3cret"), None);
+        assert_eq!(bridge_scheme_route("/s3cret/stream/abc", "s3cret"), None);
+        assert_eq!(
+            bridge_scheme_route("s3cret/web-player/state", "s3cret"),
+            None
+        );
+    }
 
     #[test]
     fn navigation_allowlist_rejects_untrusted_origins() {

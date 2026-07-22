@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   BellIcon,
+  InfoIcon,
   Loader2Icon,
   LogInIcon,
   RadioIcon,
@@ -19,12 +21,15 @@ import { Group, SettingRow, TabPane } from "@/components/settings/primitives";
 import { usePlaybackStore } from "@/lib/store/playback";
 import { useSettingsStore } from "@/lib/store/settings";
 import { startLogin } from "@/lib/login";
+import { checkForUpdates } from "@/lib/updater";
+import { APP_NAME } from "@/lib/branding";
 
 export function GeneralTab() {
   return (
     <TabPane tightTop>
       <AccountGroup />
       <BehaviorGroup />
+      <AboutGroup />
     </TabPane>
   );
 }
@@ -190,6 +195,49 @@ function BehaviorGroup() {
             onCheckedChange={setAutoRadio}
             aria-label="Autoplay radio"
           />
+        }
+      />
+    </Group>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* About                                                               */
+/* ------------------------------------------------------------------ */
+
+function AboutGroup() {
+  // The installed version, read from the Tauri manifest rather than a
+  // bundled constant, so it always matches the build the user is running.
+  const [version, setVersion] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    getVersion()
+      .then((value) => {
+        if (!cancelled) setVersion(value);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <Group>
+      <SettingRow
+        icon={InfoIcon}
+        title="Version"
+        // An unreadable version is not worth an error state here: the row
+        // simply names the app until the manifest answers.
+        description={version ? `${APP_NAME} ${version}` : APP_NAME}
+        control={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void checkForUpdates({ silent: false })}
+          >
+            Check for updates
+          </Button>
         }
       />
     </Group>

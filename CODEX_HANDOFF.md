@@ -4,9 +4,9 @@
 > engineering, UI, release, and troubleshooting context for this repository.
 >
 > Last verified: **2026-07-22**
-> Current app version: **0.4.7**
-> Current release candidate: **v0.4.7 official WebPlayer and offline playlists**
-> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.4.6>
+> Current app version: **0.5.2**
+> Current release candidate: **v0.5.2 Linux playback bridge and mesh performance**
+> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.5.1>
 
 ## 1. New-session quick start
 
@@ -299,7 +299,9 @@ native observer bridge.
   account's persistent profile, so YouTube's advertisements, regional limits,
   account restrictions, and entitlements remain intact.
 - The remote YouTube document has no Tauri capability. A versioned observer
-  reports playback through a secret per-launch loopback bridge. Native code
+  reports playback through a secret per-launch bridge: a loopback HTTP route on
+  Windows and macOS, and the secure `goosicbridge` URI scheme on Linux, where
+  WebKitGTK blocks loopback HTTP as mixed content (see section 13). Native code
   validates the trusted Origin, secret, payload size, generation, expected
   video ID, strictly increasing per-generation sequence, and numeric values
   before emitting readiness, position, duration, volume, buffering,
@@ -625,6 +627,46 @@ frost overlay keeps only a smaller finishing backdrop blur.
 **Do not move the primary blur back to only `.album-mesh-frost`.** Dev testing
 alone will not catch the regression. Any mesh change must be checked with a
 production/Tauri build.
+
+### Linux renders the mesh at quarter scale
+
+Linux runs with WebKitGTK's accelerated DMA-BUF renderer disabled
+(`src-tauri/src/main.rs`), so this background's blur is rasterized in software
+and was the app's single most expensive thing to paint. Measured with the real
+stack at 1600x900 on WebKitGTK 2.52.5:
+
+| Variant                                  | FPS  |
+| ---------------------------------------- | ---- |
+| As shipped (`blur(clamp(110px,9vw,160px))`) | 4.4  |
+| Only the outer grid transform animating  | 4.2  |
+| Nothing animating, blur kept             | 14.2 |
+| `blur(40px)` instead                     | 13.7 |
+| Animated, filter removed entirely        | 57.0 |
+
+The animation is therefore not the cost — the number of blurred pixels is.
+`MeshLayer` adds `album-mesh-lowres` when `isLinuxWebview()`, which sizes the
+`.album-mesh-scaler` host to 25% and upscales it with `transform: scale(4)`
+while quartering the blur radius to `clamp(27.5px, 2.25vw, 40px)`. The blur
+then runs over 1/16 the pixels, and because the field is pure low-frequency
+color the upscale is visually equivalent — verified by snapshotting both paths
+with animations paused. Measured against the built CSS: **5.4 -> 60.9 FPS**.
+
+Two invariants:
+
+- The reduced radius must stay exactly a quarter of the full-scale one, or the
+  upscaled field stops matching Windows/macOS. `vw` is viewport-relative, not
+  element-relative, so `2.25vw` is the correct quarter of `9vw`.
+- `.album-mesh-scaler` is always rendered, on every platform, as a
+  full-size passthrough. Both paths keep one DOM shape; only CSS differs.
+
+Enabling the DMA-BUF renderer is not an alternative. On this dev machine
+(RTX 4070 + hybrid Wayland) `WEBKIT_DISABLE_DMABUF_RENDERER=0` froze WebKit
+after the first GPU-heavy paint under Wayland, under XWayland, and with the
+iGPU forced — the safeguard in `main.rs` is still required. That is also why
+Linux keeps the flat glass fallback: a snapshot of sharp stripes under a
+`backdrop-filter` panel showed them completely unblurred even though
+`CSS.supports('backdrop-filter', 'blur(10px)')` reports `true`, which is
+exactly what `src/lib/platform.ts` documents.
 
 ## 8b. Figma Liquid Glass materials and Windows refraction
 
@@ -987,11 +1029,82 @@ same function backs the account-verification window, so the ordering protects
 both. Windows and macOS are unaffected: neither uses GTK realization, and their
 `cfg` blocks legitimately call it before `show()`.
 
+**The hidden playback window is NOT hidden on KDE (open, found 2026-07-22).**
+`configure_background_window` hides the transport WebView with three
+mechanisms, and on KDE none of them work. The user sees the official YouTube
+Music page as a real, uninteractable window in Alt-Tab while Goosic plays.
+Measured on this CachyOS/KDE machine:
+
+- The session runs `GDK_BACKEND=wayland`, so `linux_uses_x11_backend()`
+  returns false and the offscreen `set_position(-32000, -32000)` is never
+  attempted.
+- `gtk_window.set_opacity(0.0)` is a **no-op on Wayland**. GTK stores the
+  value and reads it back as `0.0`, but GDK's Wayland backend has no protocol
+  to apply surface opacity, so the window paints fully opaque.
+- Forcing XWayland does not rescue it either: under `GDK_BACKEND=x11`, KWin
+  reported the window's position back as `(0, 0)`, not `-32000` — it clamps
+  windows into the visible area. The offscreen path has therefore probably
+  never worked on KDE on either backend.
+- `set_skip_taskbar` has no Wayland protocol and does not remove it from the
+  window switcher.
+
+Two constraints bound any fix, both verified against real `music.youtube.com`:
+
+- **The surface must be mapped.** With the window never mapped, YouTube Music
+  never creates its media element at all (twelve consecutive samples reporting
+  none); mapped, advertisements and then the track play normally. The
+  "a mapped GTK surface is required" comment in that function is accurate.
+- **Hiding after startup is not enough.** Playback *does* survive unmapping
+  once it has started — `currentTime` keeps advancing with
+  `document.visibilityState === "hidden"` — but a fresh navigation performed
+  while unmapped initializes nothing, and Goosic navigates this WebView on
+  every track. "Show once, then hide forever" therefore does not fit.
+
+So there is no client-side way on KDE to keep this toplevel both mapped and
+hidden. Any real fix is a trade-off (a 1×1 mapped window, a documented KWin
+rule, or reparenting the transport as a child webview) and none is implemented
+yet. Playback itself is unaffected — this is a visibility bug only.
+
 This whole function is `cfg(target_os = "linux")` and therefore **cannot be
 compile-checked from a Windows or macOS dev box** — `cargo check` there skips
 it entirely. The Ubuntu release job is the first real compile. Prefer changes
 that reuse calls already present in the file over introducing new `gdk`/`cairo`
 API surface that no local check can validate.
+
+**The observer bridge cannot use loopback HTTP on Linux (found 2026-07-22).**
+WebKitGTK blocks an `http://127.0.0.1` subresource of an HTTPS document as
+mixed content, so the observer's `fetch` to the loopback bridge never left the
+official page. Verified against real `music.youtube.com` in a WebKitWebView:
+`[blocked] The page at https://music.youtube.com/ requested insecure content
+from http://127.0.0.1:PORT/web-player/state`, and the server recorded zero
+requests. Chromium and WKWebView treat loopback as a potentially trustworthy
+origin, which is why only Linux is affected.
+
+The symptom is not a silent failure: the track is *audible* while React never
+receives `ready`, so the 12-second startup timer in `audio-engine.ts` fires,
+`failWebPlayback` recreates the WebPlayer and restarts the same song, and the
+second timeout surfaces "Official player startup timed out."
+
+Linux therefore carries the identical envelope over the custom URI scheme
+`goosicbridge` (`web_player::BRIDGE_SCHEME`), registered through Tauri's
+`register_asynchronous_uri_scheme_protocol`. wry registers custom schemes with
+WebKit's security manager as *secure*, which is what lifts the mixed-content
+block, and it forwards the request's method, headers, and body (its
+`linux-body` feature is enabled by `tauri-runtime-wry`). `serve_bridge_scheme`
+applies the same gates as the loopback router — trusted Origin, the bridge
+header, the per-launch secret in the path, POST only, the 16 KiB limit — plus
+one the HTTP route cannot express: only the `youtube-player` webview label is
+accepted. Both transports then share `apply_state_event`/`apply_identity_event`,
+so there is exactly one copy of the validation.
+
+Two details that are load-bearing:
+
+- The response must carry `Access-Control-Allow-Origin`. The scheme is
+  cross-origin to the page, and the observer reads `response.ok` to confirm a
+  terminal `ended` event was delivered; without the header the fetch rejects
+  and that bookkeeping never runs.
+- `WebKitSettings:allow-running-of-insecure-content` is **gone** from current
+  WebKitGTK (verified absent on 2.52.5). Do not reach for it as a shortcut.
 
 Building an AppImage locally on Arch/CachyOS has a separate `linuxdeploy`
 `strip`/`.relr.dyn` incompatibility. See
@@ -1066,6 +1179,17 @@ These were present and non-blocking at the `v0.3.6` release:
   effects involving `filter`, `backdrop-filter`, isolation, or large layers.
 - The Windows installer is not Authenticode code-signed, so SmartScreen may
   warn. Updater artifacts are separately signed with Tauri's signing key.
+- On Linux the console prints two harmless third-party messages that are not
+  Goosic's and are not playback failures. `libayatana-appindicator is
+  deprecated` comes from the library itself, pulled in by Tauri's `tray-icon`
+  feature. Bursts of `gst_value_collect_int_range: assertion ... failed` /
+  `range start is not smaller than end` come from `WebKitWebProcess` building a
+  degenerate `GstIntRange` (min >= max) while enumerating codecs; GStreamer
+  drops that caps field and continues. Goosic links no GStreamer code, and
+  `gst-inspect-1.0 -a` over the installed plugins reports none of these, so
+  there is nothing to fix in this repository. Do not read them as the
+  `appsink`/`autoaudiosink` packaging failure below — that one has a different
+  signature and does break playback.
 - AppImage media playback requires bundled GStreamer plugins. The exact
   `appsink not found` / `autoaudiosink not found` plus GLib null-pointer
   signature is a packaging failure, not harmless MPRIS noise. See
@@ -1129,7 +1253,17 @@ persisted and synchronized across native windows.
 
 ## 18. Recent release history
 
-- **Unreleased `v0.4.7`** â€” moves ordinary playback to an official persistent
+- **`v0.5.2`** â€” makes Linux playback actually work. The observer bridge moves
+  to a secure custom URI scheme because WebKitGTK blocks its loopback HTTP as
+  mixed content (section 13), which had left every track audible but stuck on a
+  loading spinner until it timed out and restarted. The album mesh rasterizes at
+  quarter scale on Linux (5.4 -> 60.9 FPS, section 8), and Settings shows the
+  running version. Ships with the open KDE stray-window bug in section 13.
+- `v0.5.1` â€” fixed the Linux SIGABRT on first play (GTK realization order) and
+  the macOS stuck loading spinner.
+- `v0.5.0` â€” official YouTube Music WebPlayer as the sole online backend,
+  album mesh background, and GitHub-driven release notes.
+- **`v0.4.7`** â€” moved ordinary playback to an official persistent
   YouTube Music WebPlayer on Windows, macOS, and Linux, opening playback to
   guests and free accounts while preserving advertisements and restrictions.
   Offline audio becomes an explicit Premium-only playlist download with

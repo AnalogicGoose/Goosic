@@ -1802,7 +1802,7 @@ async fn set_account_channel(
         (Some(port), Some(token)) => (port, token),
         _ => return Err("playback bridge is not ready".into()),
     };
-    let bridge_url = format!("http://127.0.0.1:{port}/{token}/web-player/identity");
+    let bridge_url = web_player::bridge_endpoint(port, &token, "identity");
     let _session = session.mutation.lock().await;
     let mut idx = read_index(&app).await;
     if idx.active.as_deref() != Some(id.as_str()) {
@@ -2925,7 +2925,7 @@ async fn web_player_load(
     // A restored queue can reach this command during that short cold-start
     // window, so await readiness instead of consuming both frontend retries.
     let (port, web_player_token) = wait_for_web_player_bridge(server.inner()).await?;
-    let bridge_url = format!("http://127.0.0.1:{port}/{web_player_token}/web-player/state");
+    let bridge_url = web_player::bridge_endpoint(port, &web_player_token, "state");
     // Hold the account identity stable through profile selection and player
     // creation. A concurrent account/channel switch will wait, then reset this
     // owner before committing its new index snapshot.
@@ -4127,7 +4127,7 @@ pub fn run() {
     let web_player_state = web_player::WebPlayerState::default();
     let web_player_server_state = web_player_state.clone();
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main_window(app);
         }))
@@ -4168,7 +4168,32 @@ pub fn run() {
         .manage(AccountSessionGuard::default())
         .manage(RefreshGuard::default())
         .manage(discord::spawn())
-        .manage(lastfm::LastfmState::default())
+        .manage(lastfm::LastfmState::default());
+
+    // The official page cannot reach the loopback bridge on Linux: WebKitGTK
+    // blocks an `http://127.0.0.1` subresource of an HTTPS document as mixed
+    // content, so playback used to run audibly while every sample was dropped
+    // inside the page. Serve the same envelope over a scheme WebKit treats as
+    // secure. Windows and macOS keep the loopback route untouched.
+    #[cfg(target_os = "linux")]
+    let builder = builder.register_asynchronous_uri_scheme_protocol(
+        web_player::BRIDGE_SCHEME,
+        |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let label = ctx.webview_label().to_string();
+            tauri::async_runtime::spawn(async move {
+                let token_handle = app.state::<StreamServerState>().web_player_token.clone();
+                let player_state = app.state::<web_player::WebPlayerState>().inner().clone();
+                let token = token_handle.lock().await.clone().unwrap_or_default();
+                responder.respond(
+                    web_player::serve_bridge_scheme(&app, &player_state, &label, &token, request)
+                        .await,
+                );
+            });
+        },
+    );
+
+    let app = builder
         .invoke_handler(tauri::generate_handler![
             ensure_ytdlp,
             get_stream_base_url,

@@ -624,6 +624,44 @@ html body [data-slot="sidebar-container"] {
     isolation: isolate;
   }
 
+  /* Transparent passthrough: the grid keeps filling the layer exactly as it
+     did before this element existed. `.album-mesh-lowres` below is the only
+     thing that gives it a job. */
+  .album-mesh-scaler {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Linux (WebKitGTK) rasterizes the grid's blur in software, and that blur is
+     the entire frame cost — measured with the real stack at 1600x900: 57fps
+     with the filter removed, 14fps with the animation frozen but the filter
+     kept, 4.4fps as shipped. So the animation is not what to cut; the number
+     of blurred pixels is.
+
+     Rasterize the field at quarter scale and upscale it with a transform: the
+     blur then runs over 1/16 the pixels at 1/4 the radius, and because this
+     background is pure low-frequency color the upscale is visually
+     equivalent. Measured 5.7fps -> 60.1fps.
+
+     The radius must stay exactly a quarter of the full-scale one or the
+     upscaled field will not match the other platforms. `vw` is viewport-
+     relative, not element-relative, so 2.25vw is the correct quarter of 9vw.
+     The blur stays on the grid itself — see the note below; it must never
+     move to `.album-mesh-frost` alone. */
+  .album-mesh-lowres .album-mesh-scaler {
+    width: 25%;
+    height: 25%;
+    transform: scale(4);
+    transform-origin: top left;
+  }
+
+  .album-mesh-lowres .album-mesh-grid {
+    filter: blur(clamp(27.5px, 2.25vw, 40px)) saturate(108%);
+  }
+
   .album-mesh-grid {
     position: absolute;
     inset: -30%;

@@ -3,6 +3,8 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { pickHighResThumbnail } from "@/components/shared/thumbnail";
 import { currentTrack, usePlaybackStore } from "@/lib/store/playback";
+import { isLinuxWebview } from "@/lib/platform";
+import { cn } from "@/lib/utils";
 
 type MeshSample = { color: string; weight: number };
 type MeshPalette = readonly [
@@ -219,26 +221,39 @@ function MeshLayer({ palette }: { palette: MeshPalette }) {
 
   return (
     <div
-      className="album-mesh-layer absolute inset-0 overflow-hidden"
+      className={cn(
+        "album-mesh-layer absolute inset-0 overflow-hidden",
+        // WebKitGTK rasterizes the mesh's blur in software (its accelerated
+        // DMA-BUF path is disabled — see src-tauri/src/main.rs), and that blur
+        // is the whole cost of this background: measured on Linux the animated
+        // mesh runs at 57fps with the filter removed and 4.4fps with it, while
+        // freezing the animation only reaches 14fps. Quarter-scale rasterizing
+        // is what actually helps, so Linux opts into it.
+        isLinuxWebview() && "album-mesh-lowres",
+      )}
       style={{ backgroundColor: palette[0].color }}
     >
-      <div className="album-mesh-grid">
-        {cells.map((cell, index) => (
-          <span
-            key={`${index}-${cell.color}`}
-            className="album-mesh-cell"
-            style={
-              {
-                "--mesh-color": cell.color,
-                "--mesh-x": `${cell.x.toFixed(1)}%`,
-                "--mesh-y": `${cell.y.toFixed(1)}%`,
-                "--mesh-scale": cell.scale.toFixed(3),
-                "--mesh-delay": `${-((index * 1.37) % 19).toFixed(2)}s`,
-                "--mesh-duration": `${18 + (index % 7) * 2}s`,
-              } as CSSProperties
-            }
-          />
-        ))}
+      {/* Passthrough on GPU-blur platforms; the quarter-scale raster host on
+          Linux. Always present so both paths share one DOM shape. */}
+      <div className="album-mesh-scaler">
+        <div className="album-mesh-grid">
+          {cells.map((cell, index) => (
+            <span
+              key={`${index}-${cell.color}`}
+              className="album-mesh-cell"
+              style={
+                {
+                  "--mesh-color": cell.color,
+                  "--mesh-x": `${cell.x.toFixed(1)}%`,
+                  "--mesh-y": `${cell.y.toFixed(1)}%`,
+                  "--mesh-scale": cell.scale.toFixed(3),
+                  "--mesh-delay": `${-((index * 1.37) % 19).toFixed(2)}s`,
+                  "--mesh-duration": `${18 + (index % 7) * 2}s`,
+                } as CSSProperties
+              }
+            />
+          ))}
+        </div>
       </div>
       <div className="album-mesh-frost" />
     </div>
