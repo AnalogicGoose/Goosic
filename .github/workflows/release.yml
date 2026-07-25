@@ -200,18 +200,50 @@ jobs:
           # each one overwrites latest.json, so the last to run decides the notes.
           releaseBody: "See the assets below to download and install this version. macOS builds are ad-hoc signed and may require a Gatekeeper override on first launch."
           uploadUpdaterSignatures: false
+          # TEMPORARY (2026-07-25): v0.5.5-rc1 produced an AppImage with neither
+          # update information nor a zsync, and tauri-bundler swallows
+          # linuxdeploy's output through `output_ok()`, which only re-logs it at
+          # debug level. --verbose surfaces it so the appimagetool invocation is
+          # visible. Drop this once the cause is fixed.
+          args: --verbose
       # Fails the release rather than shipping an AppImage that silently cannot
       # self-update, which is what every build before this step did.
+      #
+      # Reports both checks instead of stopping at the first: whether .upd_info
+      # carries the string and whether the zsync exists are separate symptoms.
+      # Update information present but no zsync means appimagetool could not find
+      # zsyncmake; neither present means the environment never reached it.
       - name: Verify AppImage update information and zsync
         shell: bash
         run: |
-          set -euo pipefail
-          appimage="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)"
-          test -n "$appimage"
-          test -f "$appimage.zsync"
-          readelf -p .upd_info "$appimage" | grep -qF "$LDAI_UPDATE_INFORMATION"
-          echo "Embedded update information: $LDAI_UPDATE_INFORMATION"
-          echo "Generated $(basename "$appimage.zsync")"
+          set -uo pipefail
+          dir=src-tauri/target/release/bundle/appimage
+          echo "--- $dir ---"
+          ls -la "$dir"
+
+          appimage="$(find "$dir" -maxdepth 1 -name '*.AppImage' -print -quit)"
+          if [ -z "$appimage" ]; then
+            echo "::error::no .AppImage found in $dir"
+            exit 1
+          fi
+
+          # Captured rather than piped into grep: `grep -q` exits on first match
+          # and would SIGPIPE readelf, which pipefail would then report as failure.
+          upd="$(readelf -p .upd_info "$appimage" 2>&1 || true)"
+          echo "--- .upd_info of $(basename "$appimage") ---"
+          echo "$upd"
+
+          rc=0
+          if ! printf '%s' "$upd" | grep -qF "$LDAI_UPDATE_INFORMATION"; then
+            echo "::error::update information is not embedded in .upd_info"
+            rc=1
+          fi
+          if [ ! -f "$appimage.zsync" ]; then
+            echo "::error::missing $(basename "$appimage").zsync"
+            rc=1
+          fi
+          [ "$rc" -eq 0 ] && echo "OK: update information embedded and zsync present"
+          exit "$rc"
       - name: Verify bundled AppImage media plugins
         shell: bash
         run: |
