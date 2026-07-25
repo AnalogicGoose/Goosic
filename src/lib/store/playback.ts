@@ -1,5 +1,5 @@
 import { create, type StateCreator } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 import { emit } from "@tauri-apps/api/event";
 import type { ShelfItem, Thumbnail } from "@/lib/innertube/types";
 import { isFloatingPlayerWindow } from "@/lib/floating-player";
@@ -115,6 +115,44 @@ function normalizeQueueTrack(track: QueueTrack): QueueTrack {
     thumbnails: Array.isArray(track.thumbnails) ? track.thumbnails : [],
   };
 }
+
+/**
+ * A track's full `thumbnails` array (5+ objects, each a long
+ * googleusercontent URL) is by far the heaviest thing in a queue entry. A
+ * long radio/autoplay queue of them pushed `ytm-playback` past the ~5MB
+ * localStorage quota, and the resulting `setItem` throw crashed the whole app
+ * into the error boundary ("Setting the value of 'ytm-playback' exceeded the
+ * quota"). Persist only the single highest-resolution thumbnail: it renders
+ * the queue and cover on rehydrate, and the runtime cover-art logic
+ * re-derives hi-res art anyway.
+ */
+function slimThumbnailsForPersist(thumbnails: Thumbnail[]): Thumbnail[] {
+  if (!Array.isArray(thumbnails) || thumbnails.length === 0) return [];
+  let best = thumbnails[0];
+  for (const candidate of thumbnails) {
+    if ((candidate.width ?? 0) > (best.width ?? 0)) best = candidate;
+  }
+  return [best];
+}
+
+/**
+ * localStorage wrapper that never lets a write crash the app. A quota
+ * overflow (an unusually large queue even after thumbnail trimming) is
+ * swallowed with a warning, leaving the previous good value in place — the
+ * in-memory queue keeps working; only this one cross-launch snapshot is
+ * skipped. Reads and removes pass straight through.
+ */
+const quotaSafePlaybackStorage = createJSONStorage(() => ({
+  getItem: (name) => localStorage.getItem(name),
+  setItem: (name, value) => {
+    try {
+      localStorage.setItem(name, value);
+    } catch (error) {
+      console.warn("[playback] queue snapshot not persisted:", error);
+    }
+  },
+  removeItem: (name) => localStorage.removeItem(name),
+}));
 
 function shelfItemToTrack(item: ShelfItem | QueueTrack): QueueTrack | null {
   if ("videoId" in item) {
@@ -576,6 +614,7 @@ export const usePlaybackStore = isFloatingPlayerWindow()
       persist(playbackStateCreator, {
         name: "ytm-playback",
         version: 2,
+        storage: quotaSafePlaybackStorage,
         migrate: (persisted) => {
           const state = persisted as Partial<PlaybackState>;
           const queue = Array.isArray(state.queue)
@@ -592,7 +631,10 @@ export const usePlaybackStore = isFloatingPlayerWindow()
         // pendingSeek) and `playing` are reset on rehydrate so a fresh
         // launch never auto-blasts audio at you.
         partialize: (s) => ({
-          queue: s.queue,
+          queue: s.queue.map((track) => ({
+            ...track,
+            thumbnails: slimThumbnailsForPersist(track.thumbnails),
+          })),
           index: s.index,
           shuffle: s.shuffle,
           repeat: s.repeat,

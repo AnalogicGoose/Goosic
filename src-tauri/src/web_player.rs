@@ -600,7 +600,11 @@ fn observer_script(bridge_url: &str) -> String {
         get() {{ return volumeDescriptor.get.call(this); }},
         set(value) {{
           const requested = Number(value);
-          const ceiling = desiredState.volume;
+          // After the requested track finishes, nothing in this document
+          // should be audible (see the play() override below), so the ceiling
+          // drops to zero — this closes the "page assigns volume to a fresh
+          // element before any sample runs" window for its autoplay pick too.
+          const ceiling = (pendingContentEnded || reportedTrackEnded) ? 0 : desiredState.volume;
           volumeDescriptor.set.call(
             this,
             Number.isFinite(requested) ? Math.min(Math.max(requested, 0), ceiling) : ceiling
@@ -623,7 +627,19 @@ fn observer_script(bridge_url: &str) -> String {
   try {{
     const nativePlay = HTMLMediaElement.prototype.play;
     HTMLMediaElement.prototype.play = function (...args) {{
-      applyDesiredVolume(this);
+      // Once the requested track has finished, the only thing that can call
+      // play() in this document is the official page's OWN autoplay pick (or a
+      // spurious rewind of the just-finished element). Goosic navigates this
+      // WebView to the real next track in a fresh document, so nothing here
+      // should ever be audible again. Mute at the source: the reactive pause()
+      // in the sample loop is up to one 250ms tick behind, which is exactly
+      // the audible burst of the wrong song the user heard between tracks.
+      if (pendingContentEnded || reportedTrackEnded) {{
+        try {{ this.muted = true; }} catch {{}}
+        try {{ this.volume = 0; }} catch {{}}
+      }} else {{
+        applyDesiredVolume(this);
+      }}
       return nativePlay.apply(this, args);
     }};
   }} catch {{}}
