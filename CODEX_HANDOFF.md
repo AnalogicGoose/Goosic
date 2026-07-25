@@ -877,18 +877,63 @@ caused invalid release credentials.
 Each successful release should contain:
 
 - `Goosic_<version>_x64-setup.exe`
-- `Goosic_<version>_x64-setup.exe.sig`
-- `Goosic_<version>_amd64.AppImage` and `.sig`
-- `Goosic_<version>_amd64.deb` and `.sig`
-- `Goosic-<version>-1.x86_64.rpm` and `.sig`
+- `Goosic_<version>_amd64.AppImage`
+- `Goosic_<version>_amd64.AppImage.zsync` (AppImage self-update metadata)
 - `Goosic_<version>_universal.dmg`
-- `Goosic.app.tar.gz` and `.sig` (macOS updater artifact)
+- `Goosic.app.tar.gz` (macOS updater artifact)
 - `latest.json`
+
+Four assets plus `latest.json`, down from eleven. The `.deb`/`.rpm` bundles were
+dropped, and the `.sig` files are no longer attached as assets — see below.
+
+**Updater signatures are still generated (changed 2026-07-25).**
+`createUpdaterArtifacts: true` stays on; only the *upload* of the `.sig` files is
+disabled, via `uploadUpdaterSignatures: false` on each `tauri-action` step. That
+input requires **tauri-action v1**, which is why all three jobs moved from `@v0`
+to `@v1` (the six inputs this workflow passes all exist in v1; none of the
+eleven inputs v1 removed were used).
+
+The `.sig` assets were redundant: `tauri-action` writes the identical signature
+inline into `latest.json`, and that inline copy is the only one
+`tauri-plugin-updater` reads — it never fetches the `.sig` asset. Confirmed
+byte-for-byte against the v0.5.4 release. Do not read this as "signing was
+turned off"; disabling `createUpdaterArtifacts` instead would strip the
+`signature` field from `latest.json` and break auto-update on all three
+platforms. The only thing lost is users verifying a download by hand with
+minisign; re-enable the upload if that becomes a requirement.
 
 ## 12. Exact release procedure
 
 The release workflow is `.github/workflows/release.yml` and runs only when a
-new `v*` tag is pushed. It publishes a non-draft, non-prerelease GitHub Release.
+new `v*` tag is pushed.
+
+**The release is assembled as a draft and published atomically (changed
+2026-07-25).** The job graph is:
+
+```
+create-release ─→ build-windows ─→ build-linux ─→ build-macos ─→ publish-release
+   (draft)              (all three upload into the draft by id)      (draft=false)
+```
+
+`create-release` opens the draft and emits its numeric id; every platform job
+receives that id as `releaseId` instead of `tagName`. Nothing is visible to
+users until `publish-release` runs, so the assets no longer appear staggered
+(Windows first, macOS minutes later), and a mid-run failure leaves a deletable
+draft rather than a public half-release. A draft has no git ref, so it cannot be
+addressed by tag — this is why the id is threaded through and why the zsync
+upload goes to `uploads.github.com` by id instead of `gh release upload <tag>`.
+
+**A tag containing a hyphen is published as a prerelease** (`v0.5.5-rc1`), which
+is the supported way to smoke-test the workflow end to end. `publish-release`
+patches only `draft`, so that flag survives.
+
+**The platform jobs must stay sequential.** They no longer race to create the
+release, but each still rebuilds `latest.json` by downloading the copy attached
+to the release and merging its own platforms in. That read-modify-write means a
+parallel matrix would let two jobs read the same base and have the second write
+drop the first one's entries; tauri-action only retries HTTP conflicts, which
+does not repair a lost update. Do not convert this into a matrix without first
+moving `latest.json` generation into a single job.
 
 ### Version bump
 
@@ -1008,6 +1053,20 @@ src-tauri/target/release/goosic.exe
 
 ### Linux/AppImage build contract
 
+**Linux ships the AppImage only (changed 2026-07-25).**
+`src-tauri/tauri.linux.conf.json` sets `bundle.targets` to `["appimage"]`; the
+`deb` and `rpm` targets were dropped to keep the release asset list small. The
+AppImage is unaffected by this: `tauri-bundler` stages its own Debian tree in
+`target/release/bundle/appimage_deb` as an internal step of the AppImage build,
+which is independent of the `deb` target (verified — a `--bundles appimage` run
+produces `appimage/` and `appimage_deb/` and no `deb/` or `rpm/`). Do not re-add
+`deb` on the assumption that the AppImage needs it.
+
+The consequence is that `latest.json` no longer carries `linux-x86_64-deb` or
+`linux-x86_64-rpm` entries. `tauri-plugin-updater` is unaffected because it
+resolves `linux-x86_64`/`linux-x86_64-appimage`, both of which point at the
+AppImage; those package formats never auto-updated anyway.
+
 Goosic plays audio through WebKitGTK/GStreamer. The AppImage must keep
 `bundle.linux.appimage.bundleMediaFramework: true` in `tauri.conf.json`, and
 the Ubuntu release runner must install the base, good, bad, and libav
@@ -1018,6 +1077,36 @@ the window freezes or turns black.
 The release workflow verifies `appsink`/`autoaudiosink` on the build host and
 checks for `libgstapp.so`, `libgstautodetect.so`, and `libgstlibav.so` inside
 the final AppImage. Do not remove these checks as an optimization.
+
+**AppImage self-update metadata (added 2026-07-25).** Gear Lever and
+AppImageUpdate read a 1 KiB `.upd_info` ELF section in the AppImage runtime.
+Through v0.5.4 that section existed but was entirely zeroed (verified by
+`readelf -S` + a byte dump of the released asset), so those clients correctly
+reported the app as non-updatable.
+
+`tauri.conf.json` has no setting for this — `AppImageConfig` only accepts
+`bundleMediaFramework` and `files`. The injection point is the environment:
+`tauri-bundler` shells out to `linuxdeploy` inheriting the environment (the same
+property the local `OUTPUT=`/`ARCH=` workaround relies on), `linuxdeploy` passes
+it to `linuxdeploy-plugin-appimage`, and the plugin forwards
+`LDAI_UPDATE_INFORMATION` to `appimagetool -u`. The `build-linux` job sets it to
+`gh-releases-zsync|AnalogicGoose|Goosic|latest|*amd64.AppImage.zsync`, plus the
+legacy `UPDATE_INFORMATION`/`UPD_INFO` names for the older plugin tauri-bundler
+falls back to when the download fails. The glob must stay wildcarded because the
+asset name carries the version.
+
+Because the plugin bundles `zsyncmake`, the same `appimagetool` run also writes
+`Goosic_<version>_amd64.AppImage.zsync`. `tauri-action` does not upload it — the
+bundler never reports it as a bundle — so a dedicated `gh release upload` step
+attaches it. Both the embedded string and the zsync are asserted by the
+"Verify AppImage update information and zsync" step; it fails the release rather
+than shipping a silently non-updatable AppImage.
+
+This runs *inside* tauri-bundler, so the AppImage is final before Tauri signs
+it: the `.sig` and `latest.json` consumed by `tauri-plugin-updater` stay valid.
+**Do not patch `.upd_info` after the bundle is produced** — that changes the
+bytes Tauri already signed and breaks the in-app updater. The two update paths
+(AppImage clients vs. `tauri-plugin-updater`) are independent and both work.
 
 **GTK realization order (found 2026-07-22, aborted every v0.5.0 Linux play).**
 `configure_background_window`'s Linux path must call
