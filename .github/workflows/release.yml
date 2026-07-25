@@ -63,31 +63,36 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # A draft has no git ref, so it cannot be looked up by tag; every lookup
-          # here goes through the releases list, which does include drafts.
-          find_id() {
-            gh api "repos/$REPO/releases" \
-              --jq "map(select(.tag_name == \"$TAG\")) | .[0].id // empty"
-          }
-          # Idempotent so re-running a failed workflow reuses the same draft
-          # instead of dying on "release already exists".
-          id="$(find_id)"
+          # Reuse an existing release for this tag so re-running a failed run does
+          # not pile up drafts. A draft has no git ref, so it cannot be fetched by
+          # tag; the list endpoint is the only thing that returns drafts.
+          # `|| true` because this is best-effort: a miss just means we create one.
+          id="$(gh api "repos/$REPO/releases" \
+            --jq "map(select(.tag_name == \"$TAG\")) | .[0].id // empty" || true)"
+
           if [ -n "$id" ]; then
             echo "::notice::Reusing existing release $id for $TAG"
           else
-            args=(--repo "$REPO" --title "Goosic $TAG" --draft
-                  --notes "See the assets below to download and install this version.")
             # v0.5.5-rc1 → prerelease; v0.5.5 → normal release.
-            if [[ "$TAG" == *-* ]]; then
-              args+=(--prerelease)
-              echo "::notice::$TAG contains a hyphen, marking the release as a prerelease"
-            fi
-            gh release create "$TAG" "${args[@]}"
-            id="$(find_id)"
+            prerelease=false
+            case "$TAG" in *-*) prerelease=true ;; esac
+
+            # Created through the API rather than `gh release create` so the id
+            # comes straight back from the creating call. Creating and then
+            # searching the list for the new release loses the race against the
+            # API's eventual consistency: v0.5.5-rc1 created the draft fine and
+            # then found nothing in the list milliseconds later.
+            id="$(gh api --method POST "repos/$REPO/releases" \
+              -f tag_name="$TAG" \
+              -f name="Goosic $TAG" \
+              -f body="See the assets below to download and install this version." \
+              -F draft=true \
+              -F prerelease="$prerelease" \
+              --jq .id)"
+            echo "::notice::Created draft release $id (prerelease=$prerelease)"
           fi
           test -n "$id"
           echo "release_id=$id" >> "$GITHUB_OUTPUT"
-          echo "::notice::Draft release id $id"
 
   build-windows:
     needs: create-release
