@@ -145,16 +145,19 @@ jobs:
     #
     # The zsync half needs `zsyncmake` on PATH, which is why the apt step above
     # installs `zsync`. appimagetool silently skips zsync generation when it
-    # cannot find it ("zsyncmake is not installed/bundled, skipping") and still
-    # embeds the update information, so the failure looks like a half-success.
-    # v0.5.5-rc1 hit exactly that: `.upd_info` was correct, no zsync was written.
-    # The plugin does bundle its own zsyncmake — it is picked up locally — but
-    # appimagetool did not find it on the runner. Do not drop the apt package on
-    # the assumption that the bundled copy is enough.
+    # embeds the update information, so a partial failure looks like a success.
     #
-    # This runs inside tauri-bundler, so the AppImage is final before Tauri signs
-    # it: the `.sig` and `latest.json` used by the in-app tauri-plugin-updater
-    # stay valid. Do not patch `.upd_info` after the fact; that invalidates them.
+    # Only the `.upd_info` half is taken from appimagetool. It also knows how to
+    # emit the zsync, but on this runner it never does — even with zsyncmake on
+    # PATH (the ubuntu image already ships zsync 0.6.2), which cost two release
+    # cycles to establish. The zsync is therefore generated explicitly in its own
+    # step below. That is safe in a way patching `.upd_info` would not be: the
+    # zsync is derived *from* the finished AppImage and does not modify a byte of
+    # it, so the `.sig` and `latest.json` behind tauri-plugin-updater stay valid.
+    # Verified byte-for-byte identical to appimagetool's own output.
+    #
+    # Do not patch `.upd_info` after the fact; that would invalidate the
+    # signature Tauri already produced over the AppImage.
     #
     # LDAI_UPDATE_INFORMATION is the current plugin's variable. The two legacy
     # names cover the older built-in plugin tauri-bundler falls back to when the
@@ -210,13 +213,24 @@ jobs:
           # each one overwrites latest.json, so the last to run decides the notes.
           releaseBody: "See the assets below to download and install this version. macOS builds are ad-hoc signed and may require a Gatekeeper override on first launch."
           uploadUpdaterSignatures: false
+      # appimagetool embeds the update information but will not write the zsync on
+      # this runner, so it is built here from the finished AppImage. `-u` takes
+      # the bare file name, exactly as appimagetool does, so the zsync references
+      # its sibling asset relative to its own download URL.
+      - name: Generate AppImage zsync
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          zsyncmake -u "$(basename "$appimage")" -o "$appimage.zsync" "$appimage"
+
       # Fails the release rather than shipping an AppImage that silently cannot
       # self-update, which is what every build before this step did.
       #
       # Reports both checks instead of stopping at the first: whether .upd_info
-      # carries the string and whether the zsync exists are separate symptoms.
-      # Update information present but no zsync means appimagetool could not find
-      # zsyncmake; neither present means the environment never reached it.
+      # carries the string and whether the zsync exists are separate symptoms
+      # produced by different tools, and collapsing them hides which one broke.
       - name: Verify AppImage update information and zsync
         shell: bash
         run: |

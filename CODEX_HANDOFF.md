@@ -1095,14 +1095,20 @@ legacy `UPDATE_INFORMATION`/`UPD_INFO` names for the older plugin tauri-bundler
 falls back to when the download fails. The glob must stay wildcarded because the
 asset name carries the version.
 
-The same `appimagetool` run also writes `Goosic_<version>_amd64.AppImage.zsync`,
-**but only if `zsyncmake` is on PATH** — which is why the Ubuntu job installs the
-`zsync` apt package. When appimagetool cannot find it, it logs "zsyncmake is not
-installed/bundled, skipping", still embeds the update information, and exits
-successfully; the result is a half-configured AppImage that looks fine. That is
-exactly what v0.5.5-rc1 produced: correct `.upd_info`, no zsync. The plugin does
-ship its own `zsyncmake` and it is found on a local Arch box, so this cannot be
-reproduced outside CI — do not remove the apt package.
+**Only the `.upd_info` half comes from appimagetool.** It can also emit the
+`.zsync`, and does so on a local Arch box, but on the Ubuntu runner it never
+does — not even with `zsyncmake` on PATH (the runner image already ships zsync
+0.6.2, so the `zsync` apt entry is redundant belt-and-braces). Establishing that
+cost two release cycles, because appimagetool logs "zsyncmake is not
+installed/bundled, skipping", embeds the update information anyway and exits 0:
+a partial failure that looks like success.
+
+The zsync is therefore generated explicitly by a `zsyncmake` step. This is safe
+in a way that patching `.upd_info` would not be — the zsync is derived *from* the
+finished AppImage and modifies not one byte of it, so the `.sig` and
+`latest.json` behind `tauri-plugin-updater` stay valid. Its output was verified
+byte-for-byte identical to appimagetool's. Use `-u <bare file name>` so the zsync
+references its sibling asset relative to its own download URL.
 
 `tauri-action` does not upload the zsync — the bundler never reports it as a
 bundle — so a dedicated upload step attaches it. Both the embedded string and the zsync are asserted by the
