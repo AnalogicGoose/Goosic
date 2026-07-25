@@ -140,8 +140,17 @@ jobs:
     # shells out to linuxdeploy, which inherits the environment and forwards these
     # to `appimagetool -u`. That fills the runtime's reserved 1 KiB `.upd_info`
     # ELF section — zeroed in every release up to v0.5.4, which is why AppImage
-    # clients reported no update information — and, because the plugin bundles
-    # zsyncmake, writes the matching `*.AppImage.zsync` next to the bundle.
+    # clients reported no update information — and makes appimagetool write the
+    # matching `*.AppImage.zsync` next to the bundle.
+    #
+    # The zsync half needs `zsyncmake` on PATH, which is why the apt step above
+    # installs `zsync`. appimagetool silently skips zsync generation when it
+    # cannot find it ("zsyncmake is not installed/bundled, skipping") and still
+    # embeds the update information, so the failure looks like a half-success.
+    # v0.5.5-rc1 hit exactly that: `.upd_info` was correct, no zsync was written.
+    # The plugin does bundle its own zsyncmake — it is picked up locally — but
+    # appimagetool did not find it on the runner. Do not drop the apt package on
+    # the assumption that the bundled copy is enough.
     #
     # This runs inside tauri-bundler, so the AppImage is final before Tauri signs
     # it: the `.sig` and `latest.json` used by the in-app tauri-plugin-updater
@@ -170,6 +179,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            zsync \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
@@ -200,12 +210,6 @@ jobs:
           # each one overwrites latest.json, so the last to run decides the notes.
           releaseBody: "See the assets below to download and install this version. macOS builds are ad-hoc signed and may require a Gatekeeper override on first launch."
           uploadUpdaterSignatures: false
-          # TEMPORARY (2026-07-25): v0.5.5-rc1 produced an AppImage with neither
-          # update information nor a zsync, and tauri-bundler swallows
-          # linuxdeploy's output through `output_ok()`, which only re-logs it at
-          # debug level. --verbose surfaces it so the appimagetool invocation is
-          # visible. Drop this once the cause is fixed.
-          args: --verbose
       # Fails the release rather than shipping an AppImage that silently cannot
       # self-update, which is what every build before this step did.
       #
