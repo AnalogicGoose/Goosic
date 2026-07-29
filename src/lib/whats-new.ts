@@ -38,6 +38,19 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.5.6",
+    date: "July 2026",
+    sections: [
+      {
+        heading: "Better radio",
+        items: [
+          "Radio autoplay now stays on the station you started, the way YouTube Music does, instead of slowly drifting into other genres over a long queue.",
+          "Songs no longer repeat while radio keeps the queue going.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.5.2",
     date: "July 2026",
     sections: [

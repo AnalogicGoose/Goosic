@@ -69,6 +69,14 @@ export type PlaybackState = {
 
   /** When true, auto-append radio tracks to the queue when the last one ends. */
   autoRadio: boolean;
+  /**
+   * The active radio station: the seed it was started on and the token for
+   * its next page. "Start radio" sets this so the auto-extend logic pages the
+   * same station from the very first extension instead of re-seeding on the
+   * last pre-filled track (which drifts off-genre). Not persisted — station
+   * tokens are short-lived, so a fresh launch re-seeds cleanly.
+   */
+  radioStation?: { seed: string; continuation?: string };
 
   // Actions — queue
   playNow: (track: QueueTrack | ShelfItem, extras?: QueueTrack[]) => void;
@@ -84,6 +92,9 @@ export type PlaybackState = {
   moveTrack: (from: number, to: number) => void;
   clearQueue: (force?: boolean) => void;
   setAutoRadio: (on: boolean) => void;
+  setRadioStation: (
+    station: { seed: string; continuation?: string } | undefined,
+  ) => void;
 
   // Actions — transport
   toggle: () => void;
@@ -186,6 +197,7 @@ const playbackStateCreator: StateCreator<PlaybackState> = (set, get) => ({
   shuffle: false,
   repeat: "off",
   autoRadio: false,
+  radioStation: undefined,
 
   status: "idle",
   error: undefined,
@@ -257,6 +269,8 @@ const playbackStateCreator: StateCreator<PlaybackState> = (set, get) => ({
       playing: true,
       error: undefined,
       loadRevision: get().loadRevision + 1,
+      // A brand-new context supersedes any active radio station.
+      radioStation: undefined,
     });
   },
 
@@ -283,6 +297,9 @@ const playbackStateCreator: StateCreator<PlaybackState> = (set, get) => ({
       playing: true,
       error: undefined,
       loadRevision: get().loadRevision + 1,
+      // A brand-new context supersedes any active radio station. "Start radio"
+      // calls setRadioStation *after* this, so its station survives.
+      radioStation: undefined,
     });
   },
 
@@ -418,6 +435,7 @@ const playbackStateCreator: StateCreator<PlaybackState> = (set, get) => ({
   },
 
   setAutoRadio: (on) => set({ autoRadio: on }),
+  setRadioStation: (radioStation) => set({ radioStation }),
 
   toggle: () => {
     const { queue, playing, status } = get();
@@ -726,6 +744,8 @@ export function initFloatingPlaybackBridge(): void {
     appendToQueue: (tracks) =>
       sendAction({ type: "appendToQueue", tracks: tracks as unknown[] }),
     setAutoRadio: (on) => sendAction({ type: "setAutoRadio", on }),
+    setRadioStation: (station) =>
+      sendAction({ type: "setRadioStation", station: station as unknown }),
     // Queue-building actions reachable from the floater's ⋮ menu (Play,
     // Play next, Add to queue, Start radio). Without these overrides they
     // mutated only the floater's mirror store — nothing actually played and

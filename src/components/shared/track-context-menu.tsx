@@ -327,8 +327,14 @@ export function TrackMenuItems({
         onSelect={async () => {
           try {
             const radio = await fetchRadio(item.id);
-            const rest = radio.filter((t) => t.id !== item.id);
+            const rest = radio.tracks.filter((t) => t.id !== item.id);
             store().playShelfItems([item, ...rest], 0);
+            // Hand the station to the auto-extend logic so it pages this same
+            // station from the first extension instead of re-seeding.
+            store().setRadioStation({
+              seed: item.id,
+              continuation: radio.continuation,
+            });
           } catch {
             store().playNow(item);
           }
