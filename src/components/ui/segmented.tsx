@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from "motion/react";
 import { useId } from "react";
 
+import { INTERACTIVE_GLASS_CONTROL_CLASS } from "@/components/ui/glass-surface";
 import { cn } from "@/lib/utils";
 
 const SPRING = {
@@ -17,10 +18,12 @@ export interface SegmentedOption<T extends string> {
 }
 
 /**
- * Segmented value picker for settings rows. Sized and shaped to match
- * the adjacent buttons: the outer track shares the `outline` button's
- * surface (`h-8`, `rounded-md`, border + `bg-background`), and the
- * selected segment is a raised chip that reads like a pressed button.
+ * Segmented value picker for settings rows. Sized and shaped to match the
+ * adjacent buttons: the outer track carries the same glass material as the
+ * `outline` button (`h-8`, `rounded-md`), and the selected segment is a raised
+ * chip that reads like a pressed button. The track used a flat
+ * `border` + `bg-background` frame, which stood out as the one control in a
+ * settings row that was not made of glass.
  * Radio semantics — it picks a value, it doesn't switch panels.
  */
 export function SegmentedControl<T extends string>({
@@ -46,7 +49,8 @@ export function SegmentedControl<T extends string>({
     <div
       role="radiogroup"
       className={cn(
-        "inline-flex h-8 shrink-0 items-center rounded-md border bg-background p-0.5 shadow-xs dark:border-input dark:bg-input/30",
+        INTERACTIVE_GLASS_CONTROL_CLASS,
+        "glass-button inline-flex h-8 shrink-0 items-center rounded-md p-0.5",
         fullWidth && "flex w-full",
         disabled && "pointer-events-none opacity-50",
         className,
