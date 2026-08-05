@@ -38,6 +38,26 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.5.7",
+    date: "July 2026",
+    sections: [
+      {
+        heading: "Real glass on macOS",
+        items: [
+          "Glass surfaces now use macOS's own materials, so menus, popovers and the player bar genuinely refract what is behind the window instead of only blurring it.",
+          "Appearance settings let you pick the material: three Liquid Glass options on macOS 26 and later, plus the five classic ones from Ultra thin through Chrome.",
+          "Older versions of macOS get the classic materials rather than the previous plain blur.",
+        ],
+      },
+      {
+        heading: "Reporting playback bugs",
+        items: [
+          "Settings now has a Playback log you can save and send along when something goes wrong with playback. It records track ids and player state only, and nothing leaves your machine unless you share the file yourself.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.5.6",
     date: "July 2026",
     sections: [
