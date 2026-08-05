@@ -3,8 +3,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   BellIcon,
+  FileTextIcon,
   InfoIcon,
   Loader2Icon,
   LogInIcon,
@@ -23,6 +25,7 @@ import { useSettingsStore } from "@/lib/store/settings";
 import { startLogin } from "@/lib/login";
 import { checkForUpdates } from "@/lib/updater";
 import { APP_NAME } from "@/lib/branding";
+import { formatDiagnostics } from "@/lib/playback-diagnostics";
 
 export function GeneralTab() {
   return (
@@ -222,6 +225,37 @@ function AboutGroup() {
     };
   }, []);
 
+  const [savingLog, setSavingLog] = useState(false);
+
+  const savePlaybackLog = async () => {
+    setSavingLog(true);
+    try {
+      // Header context is plain, non-identifying environment info. The
+      // userAgent pins the OS/WebView version (e.g. macOS 26), which is exactly
+      // what a platform-specific playback bug needs.
+      const s = usePlaybackStore.getState();
+      const track = s.index >= 0 ? s.queue[s.index] : undefined;
+      const contents = formatDiagnostics({
+        app: `${APP_NAME} ${version || "unknown"}`,
+        userAgent: navigator.userAgent,
+        backend: s.backend,
+        autoRadio: s.autoRadio,
+        repeat: s.repeat,
+        queueIndex: s.index,
+        queueLength: s.queue.length,
+        currentVideoId: track?.videoId ?? "none",
+      });
+      const path = await invoke<string>("save_playback_log", { contents });
+      // Reveal it in the OS file manager so the file is easy to attach/send.
+      await revealItemInDir(path).catch(() => {});
+      toast.success("Playback log saved", { description: path });
+    } catch (e) {
+      toast.error(`Could not save playback log: ${String(e)}`);
+    } finally {
+      setSavingLog(false);
+    }
+  };
+
   return (
     <Group>
       <SettingRow
@@ -237,6 +271,22 @@ function AboutGroup() {
             onClick={() => void checkForUpdates({ silent: false })}
           >
             Check for updates
+          </Button>
+        }
+      />
+      <SettingRow
+        icon={FileTextIcon}
+        title="Playback log"
+        description="Save a text log of recent playback events to share when reporting a bug. Contains video ids and playback state only."
+        control={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void savePlaybackLog()}
+            disabled={savingLog}
+          >
+            {savingLog ? <Loader2Icon className="animate-spin" /> : null}
+            Save log
           </Button>
         }
       />

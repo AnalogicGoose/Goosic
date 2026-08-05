@@ -157,6 +157,16 @@ pub struct PlaybackStateEvent {
     pub version: u8,
     pub generation: u64,
     pub sequence: u64,
+    /// Monotonic id of the concrete media element the observer is attached to.
+    /// Bumped on a genuine `<video>`/`<audio>` replacement. Informational: it
+    /// rides through to React for the diagnostics timeline and is not a gate.
+    #[serde(default)]
+    pub media_generation: u64,
+    /// Observer-side high-resolution issue time (ms). Secondary ordering signal
+    /// for the diagnostics timeline; identity/ordering are enforced by
+    /// generation + sequence.
+    #[serde(default)]
+    pub event_at: f64,
     pub video_id: String,
     pub actual_video_id: Option<String>,
     pub ready: bool,
@@ -317,6 +327,10 @@ async fn apply_state_event(
     payload.position = payload.position.max(0.0);
     payload.duration = payload.duration.max(0.0);
     payload.volume = payload.volume.clamp(0.0, 1.0);
+    // Informational only; never fail the envelope over a bad timestamp.
+    if !payload.event_at.is_finite() {
+        payload.event_at = 0.0;
+    }
     if let Some(error) = payload.error.as_mut() {
         *error = error.chars().take(240).collect();
     }
@@ -652,6 +666,13 @@ fn observer_script(bridge_url: &str) -> String {
   }};
   let initialized = false;
   let attachedMedia = null;
+  // A monotonic id for the concrete <video>/<audio> element currently attached.
+  // YouTube Music is a SPA and can swap the media element without a navigation;
+  // this lets the diagnostics timeline (and any future consumer) tell a genuine
+  // element replacement apart from an in-place update, the way Kaset's media
+  // occurrence does. Informational only — identity is still enforced by
+  // generation + sequence + requested/actual video id upstream.
+  let mediaGeneration = 0;
   let requestedContentMedia = null;
   let autoplayAttempts = 0;
   let pendingContentEnded = false;
@@ -756,6 +777,7 @@ fn observer_script(bridge_url: &str) -> String {
     const media = findMedia();
     if (media && media !== attachedMedia) {{
       attachedMedia = media;
+      mediaGeneration += 1;
       initialized = false;
       autoplayAttempts = 0;
       const observedMedia = media;
@@ -889,10 +911,14 @@ fn observer_script(bridge_url: &str) -> String {
     }}
     pendingError = null;
     lastObservedAd = ad;
+    let eventAt;
+    try {{ eventAt = performance.timeOrigin + performance.now(); }} catch {{ eventAt = Date.now(); }}
     const body = {{
       version: {BRIDGE_VERSION},
       generation,
       sequence: nextSequence(),
+      mediaGeneration,
+      eventAt,
       videoId: requestedVideoId,
       actualVideoId,
       ready: !!media && media.readyState >= 1,

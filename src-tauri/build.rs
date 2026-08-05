@@ -14,6 +14,7 @@ const APP_COMMANDS: &[&str] = &[
     "web_player_control",
     "web_player_reset",
     "web_player_health",
+    "save_playback_log",
     "start_login",
     "get_cookie_header",
     "get_auth_context",
