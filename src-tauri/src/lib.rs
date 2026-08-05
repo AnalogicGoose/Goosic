@@ -1400,6 +1400,10 @@ async fn open_player_window(
         .map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     native_glass::install(&win)?;
+    #[cfg(target_os = "macos")]
+    if let Err(e) = native_glass::enable_system_appearance(&win) {
+        eprintln!("[glass] {e}");
+    }
     // Dev builds: orange taskbar icon, same as the main window.
     #[cfg(debug_assertions)]
     let _ = win.set_icon(runtime_icon(&app));
@@ -4387,6 +4391,15 @@ pub fn run() {
             // main thread, which souvlaki requires and where the main window's
             // HWND is available.
             media::init(app.handle());
+            // Let the page use the real system material via `-apple-visual-effect`
+            // (see the `@supports` block in src/index.css). No-op on a system that
+            // does not expose the preference; the CSS falls back on its own.
+            #[cfg(target_os = "macos")]
+            if let Some(w) = app.get_webview_window("main") {
+                if let Err(e) = native_glass::enable_system_appearance(&w) {
+                    eprintln!("[glass] {e}");
+                }
+            }
             if let Err(e) = build_tray(app.handle()) {
                 eprintln!("[tray] build failed: {e}");
             }
