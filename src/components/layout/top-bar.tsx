@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { INTERACTIVE_GLASS_CONTROL_CLASS } from "@/components/ui/glass-surface";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import {
   DropdownMenu,
@@ -44,15 +45,25 @@ import {
 import { Input } from "@/components/ui/input";
 import { useLayoutStore, type LayoutMode } from "@/lib/store/layout";
 import { isMacOSWebview } from "@/lib/platform";
+import { cn } from "@/lib/utils";
 import { openSettings } from "@/lib/store/settings-dialog";
 import { checkForUpdates } from "@/lib/updater";
 import { AboutDialog } from "@/components/layout/about-dialog";
 
-// Caption-bar nav buttons: small circular glass pills (they inherit the
-// shared `.glass-button` material from the Button component). We only tune
-// the sizing and the resting icon colour here; the glass fill + hover
-// brightening come from the base material.
-const NAV_BTN_CLS = "size-7 text-foreground/70 hover:text-foreground";
+// Caption-bar nav buttons. These stay flat (`ghost`): the material belongs to
+// the frame around them, so giving each button its own would stack glass on
+// glass. `rounded-full` keeps hover/press states concentric with that frame.
+const NAV_BTN_CLS =
+  "size-7 rounded-full text-foreground/70 transition-transform duration-150 ease-out hover:text-foreground active:scale-95";
+
+/**
+ * The caption-bar controls read as one grouped frame rather than four loose
+ * icons, the way a system toolbar groups paired actions. The seam splits the
+ * two jobs in the cluster -- app menu + sidebar on one side, history
+ * navigation on the other -- so the grouping carries meaning instead of just
+ * boxing things in.
+ */
+const NAV_SEAM_CLS = "mx-0.5 my-1.5 w-px self-stretch bg-foreground/15";
 
 // Plain-vite dev in a regular browser has no Tauri backend —
 // `getCurrentWindow()` throws on missing `__TAURI_INTERNALS__`, which
@@ -117,11 +128,12 @@ export function TopBar() {
         className="relative z-30 flex h-9 shrink-0 select-none items-center"
       >
         <div
-          className={
-            USES_NATIVE_MACOS_TITLEBAR
-              ? "flex items-center gap-1 pl-[76px]"
-              : "flex items-center gap-1 pl-2"
-          }
+          className={cn(
+            INTERACTIVE_GLASS_CONTROL_CLASS,
+            "glass-button ml-2 flex items-center rounded-full p-0.5",
+            // Clear AppKit's traffic lights when it owns the title bar.
+            USES_NATIVE_MACOS_TITLEBAR && "ml-[76px]",
+          )}
         >
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -174,6 +186,9 @@ export function TopBar() {
           </DropdownMenu>
 
           <SidebarTrigger className={NAV_BTN_CLS} />
+
+          <span aria-hidden className={NAV_SEAM_CLS} />
+
           <Button
             variant="ghost"
             size="icon"

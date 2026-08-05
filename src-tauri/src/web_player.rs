@@ -719,9 +719,36 @@ fn observer_script(bridge_url: &str) -> String {
     }} catch {{}}
     return null;
   }};
+  // Silence the official page's own Now Playing entry.
+  //
+  // Neutering the action handlers only stops the page from *reacting* to media
+  // keys. The OS entry itself is published through `metadata`/`playbackState`,
+  // so leaving those writable put a second card next to the one Goosic drives
+  // from Rust -- and because nothing keeps the two in step, they disagree:
+  // macOS Control Center showed the same song twice, one offering pause and
+  // the other play. Goosic never reads this session (identity comes from the
+  // player API and the page URL, transport from souvlaki), so blocking it
+  // outright costs nothing.
+  //
+  // Clear whatever is already set through the real accessors first, then
+  // shadow them on the instance so later writes are dropped. This runs as an
+  // initialization script, ahead of the page's own code, and `configurable`
+  // keeps it idempotent if it is ever evaluated twice.
   try {{
-    if (navigator.mediaSession?.setActionHandler) {{
-      navigator.mediaSession.setActionHandler = () => {{}};
+    const session = navigator.mediaSession;
+    if (session) {{
+      session.setActionHandler = () => {{}};
+      try {{ session.metadata = null; }} catch {{}}
+      try {{ session.playbackState = 'none'; }} catch {{}}
+      for (const [prop, frozen] of [['metadata', null], ['playbackState', 'none']]) {{
+        try {{
+          Object.defineProperty(session, prop, {{
+            configurable: true,
+            get: () => frozen,
+            set: () => {{}},
+          }});
+        }} catch {{}}
+      }}
     }}
   }} catch {{}}
   try {{
@@ -2265,6 +2292,30 @@ mod tests {
         // WKWebView and WebKitGTK can leave `playerApi` undefined while playing
         // normally, so identity must have a second source.
         assert!(script.contains("new URL(location.href).searchParams.get('v')"));
+    }
+
+    #[test]
+    fn observer_blocks_the_pages_own_now_playing_entry() {
+        let script = observer_script("http://127.0.0.1:1234/secret/web-player/state");
+        // Suppressing only the action handlers still let the page publish its
+        // own OS entry, which appeared beside Goosic's and disagreed with it
+        // about play/pause. Both metadata sources have to be shut off.
+        assert!(script.contains("session.setActionHandler = () => {}"));
+        assert!(script.contains("session.metadata = null"));
+        assert!(script.contains("session.playbackState = 'none'"));
+        assert!(
+            script.contains("['metadata', null], ['playbackState', 'none']"),
+            "later writes must be shadowed, not just cleared once"
+        );
+        // The clear has to happen through the real accessors, before they are
+        // replaced, or an entry set by the page would survive.
+        let clear = script
+            .find("session.metadata = null")
+            .expect("observer must clear existing metadata");
+        let shadow = script
+            .find("['metadata', null], ['playbackState', 'none']")
+            .expect("observer must shadow the accessors");
+        assert!(clear < shadow, "clear must precede the no-op shadow");
     }
 
     #[test]
