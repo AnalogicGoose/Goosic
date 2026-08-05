@@ -457,6 +457,81 @@ html body [data-slot="sidebar-container"] {
     -webkit-backdrop-filter: blur(var(--glass-frost));
     backdrop-filter: blur(var(--glass-frost));
   }
+
+  /* WebKit can host a genuine system material on an element inside the page
+     through Apple's private `-apple-visual-effect` property, unlocked by
+     WKPreferences.useSystemAppearance (native_glass.rs). That beats the CSS
+     blur above — a real material, sampling what is actually behind the window
+     and following the OS across releases — and it reaches interior surfaces
+     (menus, popovers, the player bar) that an AppKit host view cannot
+     practically cover.
+
+     Two tiers, weakest first so the strongest supported one wins:
+       1. classic HIG materials, available on older macOS
+       2. Liquid Glass, macOS 26+
+     A system supporting neither never enters either block and keeps the blur.
+
+     The stop is chosen by the Glass blur slider, which publishes
+     data-blur-material / data-glass-material on <html> (see themes.ts). The
+     regular stop is the bare value in both families: the explicit `-regular`
+     spelling is not valid CSS. */
+  @supports (-apple-visual-effect: -apple-system-blur-material) {
+    .macos-backdrop-glass
+      .glass-material-interactive:not(.native-player-material) {
+      /* The material carries its own frost; a CSS blur on top double-blurs. */
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background: transparent;
+    }
+    /* The system material draws its own rim and specular highlight, so the
+       Figma reflector would read as a second, brighter edge stacked on it. */
+    .macos-backdrop-glass
+      .glass-material-interactive:not(.native-player-material)::before {
+      content: none;
+    }
+    [data-glass-material="blur-ultra-thin"]
+      .glass-material-interactive:not(.native-player-material) {
+      -apple-visual-effect: -apple-system-blur-material-ultra-thin;
+    }
+    [data-glass-material="blur-thin"]
+      .glass-material-interactive:not(.native-player-material) {
+      -apple-visual-effect: -apple-system-blur-material-thin;
+    }
+    [data-glass-material="blur-regular"]
+      .glass-material-interactive:not(.native-player-material) {
+      -apple-visual-effect: -apple-system-blur-material;
+    }
+    [data-glass-material="blur-thick"]
+      .glass-material-interactive:not(.native-player-material) {
+      -apple-visual-effect: -apple-system-blur-material-thick;
+    }
+    [data-glass-material="blur-chrome"]
+      .glass-material-interactive:not(.native-player-material) {
+      -apple-visual-effect: -apple-system-blur-material-chrome;
+    }
+    /* A Liquid Glass choice on a system that predates it degrades to the
+       standard material rather than silently losing the effect. The glass tier
+       below overrides this wherever Liquid Glass actually exists. */
+    [data-glass-material^="glass-"]
+      .glass-material-interactive:not(.native-player-material) {
+      -apple-visual-effect: -apple-system-blur-material;
+    }
+  }
+
+  @supports (-apple-visual-effect: -apple-system-glass-material) {
+    [data-glass-material="glass-clear"]
+      .glass-material-interactive:not(.native-player-material) {
+      -apple-visual-effect: -apple-system-glass-material-clear;
+    }
+    [data-glass-material="glass-regular"]
+      .glass-material-interactive:not(.native-player-material) {
+      -apple-visual-effect: -apple-system-glass-material;
+    }
+    [data-glass-material="glass-subdued"]
+      .glass-material-interactive:not(.native-player-material) {
+      -apple-visual-effect: -apple-system-glass-material-subdued;
+    }
+  }
 }
 
 @layer utilities {

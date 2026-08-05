@@ -6,7 +6,10 @@ import { isMacOSWebview, isWindowsWebview } from "@/lib/platform";
 import {
   clampGlassBlur,
   GLASS_BLUR_DEFAULT,
+  GLASS_MATERIAL_DEFAULT,
   isVisualThemeId,
+  migrateGlassMaterialId,
+  type GlassMaterialId,
   type VisualThemeId,
 } from "@/lib/themes";
 
@@ -26,6 +29,10 @@ type State = {
   /** Backdrop blur radius (px) of the shared glass material, via
    *  `--glass-blur` — the "Glass blur" slider. See `useGlassBlur`. */
   glassBlur: number;
+  /** Which macOS system material the glass uses where WebKit hosts one
+   *  (`-apple-visual-effect`). Ignored on platforms without it, which keep
+   *  `glassBlur`. See `useGlassMaterial`. */
+  glassMaterial: GlassMaterialId;
   /** System toast on track change while the app is in the background
    *  (see `lib/playback-notifications.ts`). */
   playbackNotifications: boolean;
@@ -55,6 +62,7 @@ type State = {
   setBackground: (v: BackgroundMode) => void;
   setVisualTheme: (v: VisualThemeId) => void;
   setGlassBlur: (v: number) => void;
+  setGlassMaterial: (v: GlassMaterialId) => void;
   setPlaybackNotifications: (v: boolean) => void;
   setDiscordRichPresence: (v: boolean) => void;
   setLastfmEnabled: (v: boolean) => void;
@@ -105,6 +113,7 @@ export const useSettingsStore = create<State>()(
       background: "ambient",
       visualTheme: "default",
       glassBlur: GLASS_BLUR_DEFAULT,
+      glassMaterial: GLASS_MATERIAL_DEFAULT,
       playbackNotifications: false,
       discordRichPresence: false,
       lastfmEnabled: false,
@@ -116,6 +125,7 @@ export const useSettingsStore = create<State>()(
       setBackground: (background) => set({ background }),
       setVisualTheme: (visualTheme) => set({ visualTheme }),
       setGlassBlur: (v) => set({ glassBlur: clampGlassBlur(v) }),
+      setGlassMaterial: (glassMaterial) => set({ glassMaterial }),
       setPlaybackNotifications: (playbackNotifications) =>
         set({ playbackNotifications }),
       setDiscordRichPresence: (discordRichPresence) =>
@@ -163,6 +173,7 @@ export const useSettingsStore = create<State>()(
         ) as Partial<State>;
         const value = saved?.visualTheme;
         const savedBlur = saved?.glassBlur;
+        const savedMaterial = saved?.glassMaterial;
         return {
           ...current,
           ...saved,
@@ -172,6 +183,8 @@ export const useSettingsStore = create<State>()(
             typeof savedBlur === "number"
               ? clampGlassBlur(savedBlur)
               : current.glassBlur,
+          glassMaterial:
+            migrateGlassMaterialId(savedMaterial) ?? current.glassMaterial,
         };
       },
     },

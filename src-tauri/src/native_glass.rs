@@ -5,7 +5,8 @@
 //! refraction, highlights, tinting, and active-window response are genuinely
 //! native Liquid Glass rather than a CSS approximation.
 
-use objc2::runtime::AnyClass;
+use objc2::runtime::{AnyClass, AnyObject};
+use objc2::{msg_send, sel};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSGlassEffectView, NSGlassEffectViewStyle,
     NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
@@ -23,6 +24,56 @@ pub fn material_name() -> &'static str {
     } else {
         "visual-effect"
     }
+}
+
+/// Opt a window's WKWebView into system appearance.
+///
+/// WebKit only honours the private `-apple-visual-effect` CSS property — real
+/// Liquid Glass applied to an element *inside* the page — when
+/// `WKPreferences.useSystemAppearance` is on. That preference is Apple private
+/// API, which is acceptable here for the same reason `macos-private-api`
+/// already is: Goosic ships directly rather than through the Mac App Store.
+///
+/// This buys what a native host view cannot: interior surfaces (menus,
+/// popovers, the player bar) get the genuine material in normal document flow,
+/// with their own corner radii, instead of the plain `blur()` fallback
+/// WKWebView is limited to today (`.macos-backdrop-glass` in index.css).
+///
+/// Best effort by design. The selector is resolved at runtime and a system that
+/// does not expose it simply keeps the existing CSS fallback — the matching
+/// `@supports` block means the stylesheet degrades on its own.
+pub fn enable_system_appearance(window: &tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .with_webview(|webview| unsafe {
+            let wk: *mut AnyObject = webview.inner().cast();
+            if wk.is_null() {
+                return;
+            }
+            let config: *mut AnyObject = msg_send![wk, configuration];
+            if config.is_null() {
+                return;
+            }
+            let prefs: *mut AnyObject = msg_send![config, preferences];
+            if prefs.is_null() {
+                return;
+            }
+            // WebKit has spelled this both ways across releases; probe rather
+            // than assume, so an unexpected build cannot raise a selector.
+            let plain = sel!(setUseSystemAppearance:);
+            let underscored = sel!(_setUseSystemAppearance:);
+            if msg_send![prefs, respondsToSelector: plain] {
+                let _: () = msg_send![prefs, setUseSystemAppearance: true];
+                eprintln!("[glass] WKPreferences system appearance enabled");
+            } else if msg_send![prefs, respondsToSelector: underscored] {
+                let _: () = msg_send![prefs, _setUseSystemAppearance: true];
+                eprintln!("[glass] WKPreferences system appearance enabled (private spelling)");
+            } else {
+                eprintln!(
+                    "[glass] WKPreferences exposes no useSystemAppearance; keeping CSS fallback"
+                );
+            }
+        })
+        .map_err(|error| format!("enable system appearance: {error}"))
 }
 
 pub fn install(window: &tauri::WebviewWindow) -> Result<(), String> {

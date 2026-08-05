@@ -1,9 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
+import { logCommand } from "@/lib/playback-diagnostics";
 
 export type WebPlaybackState = {
   version: number;
   generation: number;
   sequence: number;
+  /**
+   * Monotonic id of the concrete media element the observer is attached to,
+   * bumped on a genuine `<video>`/`<audio>` replacement. Diagnostics-only; not
+   * a transport gate. Optional so older payloads still deserialize.
+   */
+  mediaGeneration?: number;
+  /** Observer-side issue time (ms). Diagnostics ordering signal only. */
+  eventAt?: number;
   videoId: string;
   actualVideoId?: string | null;
   ready: boolean;
@@ -72,6 +81,11 @@ export function loadWebTrack(input: {
   volume: number;
   muted: boolean;
 }): Promise<void> {
+  logCommand("web.load", {
+    gen: input.generation,
+    req: input.videoId,
+    playing: input.playing,
+  });
   return invoke("web_player_load", input);
 }
 
@@ -80,10 +94,16 @@ export function controlWebPlayer(
   action: "play" | "pause" | "seek" | "volume" | "mute",
   value?: number,
 ): Promise<void> {
+  // Volume/mute fire on every slider tick; they add noise without helping
+  // diagnose advance/repeat bugs, so only transport controls are recorded.
+  if (action !== "volume" && action !== "mute") {
+    logCommand(`web.${action}`, { gen: generation, value });
+  }
   return invoke("web_player_control", { generation, action, value });
 }
 
 export function resetWebPlayer(): Promise<void> {
+  logCommand("web.reset");
   return invoke("web_player_reset");
 }
 

@@ -4,6 +4,11 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { fetchRadio, fetchRadioContinuation } from "@/lib/innertube/radio";
 import {
+  logBridgeSample,
+  logCommand,
+  logTransition,
+} from "@/lib/playback-diagnostics";
+import {
   isDefinitiveOfflineFileFailure,
   offlineStreamUrlFor,
 } from "@/lib/stream";
@@ -134,6 +139,35 @@ export function useAudioEngine() {
     };
   }, []);
 
+  // Record queue/transport transitions for the diagnostics timeline: which row
+  // is current, when a fresh playback generation starts (loadRevision), and any
+  // move into an error. This is the "what the app decided" half of the log; the
+  // bridge samples are "what the page did". Together they make an intermittent
+  // repeat or stuck-track legible after the fact.
+  useEffect(() => {
+    let prev = usePlaybackStore.getState();
+    const unsub = usePlaybackStore.subscribe((s) => {
+      if (
+        s.index !== prev.index ||
+        s.loadRevision !== prev.loadRevision ||
+        (s.status === "error" && prev.status !== "error")
+      ) {
+        const track = s.index >= 0 ? s.queue[s.index] : undefined;
+        logTransition("select", {
+          idx: s.index,
+          len: s.queue.length,
+          req: track?.videoId,
+          rev: s.loadRevision,
+          status: s.status,
+          backend: s.backend,
+          err: s.status === "error" ? (s.error ?? null) : null,
+        });
+      }
+      prev = s;
+    });
+    return unsub;
+  }, []);
+
   // Wire element → store events.
   useEffect(() => {
     const el = audioRef.current;
@@ -183,6 +217,10 @@ export function useAudioEngine() {
       const current = store();
       const currentTrack =
         current.index >= 0 ? current.queue[current.index] : undefined;
+      logCommand("offline.ended", {
+        req: currentTrack?.videoId,
+        idx: current.index,
+      });
       endedRadioSeedRef.current =
         current.autoRadio &&
         current.repeat === "off" &&
@@ -348,7 +386,26 @@ export function useAudioEngine() {
     let cancelled = false;
     let dispose: (() => void) | undefined;
     void listen<WebPlaybackState>("web-player-state", ({ payload }) => {
-      if (payload.generation !== webGenerationRef.current) return;
+      const accepted = payload.generation === webGenerationRef.current;
+      logBridgeSample({
+        generation: payload.generation,
+        sequence: payload.sequence,
+        mediaGeneration: payload.mediaGeneration,
+        eventAt: payload.eventAt,
+        videoId: payload.videoId,
+        actualVideoId: payload.actualVideoId,
+        ready: payload.ready,
+        playing: payload.playing,
+        buffering: payload.buffering,
+        advertisement: payload.advertisement,
+        ended: payload.ended,
+        finished: payload.finished,
+        position: payload.position,
+        duration: payload.duration,
+        error: payload.error,
+        accepted,
+      });
+      if (!accepted) return;
       const store = usePlaybackStore.getState();
       if (store.backend !== "webview" || selectionInProgressRef.current) return;
       if (payload.error) {

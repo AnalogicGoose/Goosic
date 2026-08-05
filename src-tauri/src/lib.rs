@@ -1400,6 +1400,10 @@ async fn open_player_window(
         .map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     native_glass::install(&win)?;
+    #[cfg(target_os = "macos")]
+    if let Err(e) = native_glass::enable_system_appearance(&win) {
+        eprintln!("[glass] {e}");
+    }
     // Dev builds: orange taskbar icon, same as the main window.
     #[cfg(debug_assertions)]
     let _ = win.set_icon(runtime_icon(&app));
@@ -3005,6 +3009,29 @@ async fn web_player_health(
     Ok(web_player::healthy(&app, player.inner()).await)
 }
 
+/// Persist the in-memory playback diagnostics buffer to a plain-text file the
+/// user can open and share when reporting a playback bug. Returns the absolute
+/// path so the UI can reveal it. The contents are produced by the frontend
+/// (src/lib/playback-diagnostics.ts) and are already privacy-scrubbed: video
+/// ids and playback flags only, never cookies, bridge secrets, or URLs.
+#[tauri::command]
+async fn save_playback_log(app: tauri::AppHandle, contents: String) -> Result<String, String> {
+    // A runaway buffer must never write an enormous file.
+    let bounded: String = contents.chars().take(1_000_000).collect();
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data directory: {e}"))?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("could not create app data directory: {e}"))?;
+    let path = dir.join("goosic-playback-log.txt");
+    tokio::fs::write(&path, bounded.as_bytes())
+        .await
+        .map_err(|e| format!("could not write log: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 const OFFLINE_DOWNLOAD_COOLDOWN_KEY: &str = "offlineDownloadCooldownUntil";
 const OFFLINE_DOWNLOAD_COOLDOWN: Duration = Duration::from_secs(15 * 60);
 const YTDLP_OFFLINE_RETRY_ARGS: [&str; 4] = ["--retries", "0", "--extractor-retries", "0"];
@@ -4208,6 +4235,7 @@ pub fn run() {
             web_player_control,
             web_player_reset,
             web_player_health,
+            save_playback_log,
             start_login,
             get_cookie_header,
             get_auth_context,
@@ -4363,6 +4391,15 @@ pub fn run() {
             // main thread, which souvlaki requires and where the main window's
             // HWND is available.
             media::init(app.handle());
+            // Let the page use the real system material via `-apple-visual-effect`
+            // (see the `@supports` block in src/index.css). No-op on a system that
+            // does not expose the preference; the CSS falls back on its own.
+            #[cfg(target_os = "macos")]
+            if let Some(w) = app.get_webview_window("main") {
+                if let Err(e) = native_glass::enable_system_appearance(&w) {
+                    eprintln!("[glass] {e}");
+                }
+            }
             if let Err(e) = build_tray(app.handle()) {
                 eprintln!("[tray] build failed: {e}");
             }
