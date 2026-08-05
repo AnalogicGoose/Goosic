@@ -59,7 +59,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getLikedIdsSet } from "@/components/shared/like-buttons";
-import { fetchRadio } from "@/lib/innertube/radio";
+import { fetchRadio, newRadioTracks } from "@/lib/innertube/radio";
 import { fetchLikedSongs } from "@/lib/innertube/library";
 import {
   addToPlaylist,
@@ -327,7 +327,10 @@ export function TrackMenuItems({
         onSelect={async () => {
           try {
             const radio = await fetchRadio(item.id);
-            const rest = radio.tracks.filter((t) => t.id !== item.id);
+            // The seeding page needs the same dedupe as every later one: it
+            // can repeat a track within itself, which would start the station
+            // with a duplicate already in the queue.
+            const rest = newRadioTracks(radio.tracks, [item.id]);
             store().playShelfItems([item, ...rest], 0);
             // Hand the station to the auto-extend logic so it pages this same
             // station from the first extension instead of re-seeding.

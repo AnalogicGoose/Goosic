@@ -45,6 +45,7 @@ permissions = [
   "allow-pick-cache-folder",
   "allow-quit-app",
   "allow-remove-account",
+  "allow-save-playback-log",
   "allow-set-account-channel",
   "allow-set-cache-dir",
   "allow-set-close-behavior",

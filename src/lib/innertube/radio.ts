@@ -20,6 +20,37 @@ export type RadioPage = {
 };
 
 /**
+ * Reduce a radio page to the tracks that are genuinely new to a queue.
+ *
+ * Radio repeats have two distinct sources, and filtering against a fixed set
+ * only closes the first:
+ *
+ *  1. the page carries a track the queue already holds, and
+ *  2. **the page carries the same track more than once.**
+ *
+ * The second is why the seen-set is built up as we go rather than computed
+ * once up front: each accepted track has to be visible to the tracks behind
+ * it, or both copies of an in-page duplicate pass the filter together.
+ *
+ * Every path that puts radio results into the queue must go through this —
+ * `appendToQueue` appends blindly by design, since an explicit "Add to queue"
+ * is allowed to hold the same track twice.
+ */
+export function newRadioTracks(
+  tracks: ShelfItem[],
+  alreadyQueued: Iterable<string>,
+): ShelfItem[] {
+  const seen = new Set(alreadyQueued);
+  const fresh: ShelfItem[] = [];
+  for (const track of tracks) {
+    if (seen.has(track.id)) continue;
+    seen.add(track.id);
+    fresh.push(track);
+  }
+  return fresh;
+}
+
+/**
  * Locate the `playlistPanelRenderer` (initial /next) or
  * `playlistPanelContinuation` (continuation /next) node that holds the
  * radio queue rows and its own continuation pointer.

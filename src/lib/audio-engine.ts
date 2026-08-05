@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { fetchRadio, fetchRadioContinuation } from "@/lib/innertube/radio";
+import {
+  fetchRadio,
+  fetchRadioContinuation,
+  newRadioTracks,
+} from "@/lib/innertube/radio";
 import {
   logBridgeSample,
   logCommand,
@@ -1227,12 +1231,12 @@ export function useAudioEngine() {
         // Anchor a freshly started station, then remember where it pages next.
         if (!paging) radioStationSeedRef.current = seedVideoId;
         radioContinuationRef.current = page.continuation;
-        // Dedupe against everything already queued, not just the seed, as a
-        // safety net against any overlap a continuation page still carries.
-        const existing = new Set(s.queue.map((q) => q.videoId));
-        const rest = page.tracks.filter(
-          (t) => t.id !== seedVideoId && !existing.has(t.id),
-        );
+        // Dedupe against everything already queued, and against the page
+        // itself — a single continuation page can list the same track twice.
+        const rest = newRadioTracks(page.tracks, [
+          seedVideoId,
+          ...s.queue.map((q) => q.videoId),
+        ]);
         if (rest.length) {
           s.appendToQueue(rest, "autoplay");
           const afterAppend = usePlaybackStore.getState();
