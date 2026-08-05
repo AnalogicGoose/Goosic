@@ -38,8 +38,33 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.5.8",
+    date: "August 2026",
+    sections: [
+      {
+        heading: "Fixes",
+        items: [
+          "Radio could still repeat a song. A batch of recommendations that happened to list the same track twice slipped both copies into the queue, so it played again a moment later.",
+          "macOS showed the playing song twice in Control Center and on the lock screen, with the two cards disagreeing about whether it was playing or paused. Only Goosic's own card is published now.",
+          "Saving a playback log failed with a permissions error, which meant the one tool for reporting playback problems did not work. It saves properly now.",
+        ],
+      },
+      {
+        heading: "Glass everywhere",
+        items: [
+          "Buttons, dropdowns and the settings selectors now use the same glass as the player instead of a flat outline, so nothing looks out of place next to it.",
+          "The controls in the title bar sit together in one frame, with the menu and sidebar buttons grouped apart from back and forward.",
+        ],
+      },
+      {
+        heading: "Still chasing a bug?",
+        body: "If a song ever repeats or playback gets stuck, open Settings, then General, and use Save log near the bottom. Send that file along with your report. It records only track ids and player state, and nothing is uploaded anywhere unless you share the file yourself.",
+      },
+    ],
+  },
+  {
     version: "0.5.7",
-    date: "July 2026",
+    date: "August 2026",
     sections: [
       {
         heading: "Real glass on macOS",
