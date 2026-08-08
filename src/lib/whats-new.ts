@@ -38,6 +38,34 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.5.9",
+    date: "August 2026",
+    sections: [
+      {
+        heading: "Glass that matches macOS",
+        items: [
+          "The glass now bends light the way Apple's does. The distortion follows the rounded edge all the way around instead of breaking at the corners, and it reads from inside the panel rather than dragging in whatever sits just outside it.",
+          "Edges are smooth. The stair-stepped, pixelated look along the rim is gone, and wide surfaces like the player bar no longer pinch in the middle.",
+          "Large panels keep a clear, undistorted middle, with the optics kept to the rim where they belong.",
+        ],
+      },
+      {
+        heading: "One glass material setting",
+        items: [
+          "The Glass blur slider is now a Glass material picker on every platform, with the same eight options macOS offers. Windows and Linux recreate each one instead of only changing how blurry things are.",
+          "The three Liquid Glass options stay bright and keep the colour of whatever is behind them. The five classic ones frost and dim instead, the way they do on macOS.",
+          "Glass surfaces are lit and shadowed properly, so a panel reads as floating above the page even on the lightest setting.",
+        ],
+      },
+      {
+        heading: "Smoother resizing",
+        items: [
+          "Resizing a window or opening a large panel does noticeably less work behind the scenes, so the glass keeps up instead of stuttering while it catches up.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.5.8",
     date: "August 2026",
     sections: [

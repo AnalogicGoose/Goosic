@@ -3,10 +3,10 @@
 > **Read this file first in every new Codex session.** It is the durable product,
 > engineering, UI, release, and troubleshooting context for this repository.
 >
-> Last verified: **2026-07-22**
-> Current app version: **0.5.3**
-> Current release candidate: **v0.5.3 macOS playback bridge and queue hardening**
-> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.5.2>
+> Last verified: **2026-08-07**
+> Current app version: **0.5.9**
+> Current release candidate: **v0.5.9 macOS-accurate glass material**
+> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.5.8>
 
 ## 1. New-session quick start
 
