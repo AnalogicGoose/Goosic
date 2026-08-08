@@ -2,7 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { fetchRadio } from "@/lib/innertube/radio";
+import {
+  fetchRadio,
+  fetchRadioContinuation,
+  newRadioTracks,
+} from "@/lib/innertube/radio";
+import {
+  logBridgeSample,
+  logCommand,
+  logTransition,
+} from "@/lib/playback-diagnostics";
 import {
   isDefinitiveOfflineFileFailure,
   offlineStreamUrlFor,
@@ -134,6 +143,35 @@ export function useAudioEngine() {
     };
   }, []);
 
+  // Record queue/transport transitions for the diagnostics timeline: which row
+  // is current, when a fresh playback generation starts (loadRevision), and any
+  // move into an error. This is the "what the app decided" half of the log; the
+  // bridge samples are "what the page did". Together they make an intermittent
+  // repeat or stuck-track legible after the fact.
+  useEffect(() => {
+    let prev = usePlaybackStore.getState();
+    const unsub = usePlaybackStore.subscribe((s) => {
+      if (
+        s.index !== prev.index ||
+        s.loadRevision !== prev.loadRevision ||
+        (s.status === "error" && prev.status !== "error")
+      ) {
+        const track = s.index >= 0 ? s.queue[s.index] : undefined;
+        logTransition("select", {
+          idx: s.index,
+          len: s.queue.length,
+          req: track?.videoId,
+          rev: s.loadRevision,
+          status: s.status,
+          backend: s.backend,
+          err: s.status === "error" ? (s.error ?? null) : null,
+        });
+      }
+      prev = s;
+    });
+    return unsub;
+  }, []);
+
   // Wire element → store events.
   useEffect(() => {
     const el = audioRef.current;
@@ -183,6 +221,10 @@ export function useAudioEngine() {
       const current = store();
       const currentTrack =
         current.index >= 0 ? current.queue[current.index] : undefined;
+      logCommand("offline.ended", {
+        req: currentTrack?.videoId,
+        idx: current.index,
+      });
       endedRadioSeedRef.current =
         current.autoRadio &&
         current.repeat === "off" &&
@@ -348,7 +390,26 @@ export function useAudioEngine() {
     let cancelled = false;
     let dispose: (() => void) | undefined;
     void listen<WebPlaybackState>("web-player-state", ({ payload }) => {
-      if (payload.generation !== webGenerationRef.current) return;
+      const accepted = payload.generation === webGenerationRef.current;
+      logBridgeSample({
+        generation: payload.generation,
+        sequence: payload.sequence,
+        mediaGeneration: payload.mediaGeneration,
+        eventAt: payload.eventAt,
+        videoId: payload.videoId,
+        actualVideoId: payload.actualVideoId,
+        ready: payload.ready,
+        playing: payload.playing,
+        buffering: payload.buffering,
+        advertisement: payload.advertisement,
+        ended: payload.ended,
+        finished: payload.finished,
+        position: payload.position,
+        duration: payload.duration,
+        error: payload.error,
+        accepted,
+      });
+      if (!accepted) return;
       const store = usePlaybackStore.getState();
       if (store.backend !== "webview" || selectionInProgressRef.current) return;
       if (payload.error) {
@@ -1092,10 +1153,19 @@ export function useAudioEngine() {
         radioQueueRevision: s.loadRevision,
       })),
     );
+  // In-flight/dedupe guard for the current extension attempt.
   const radioFetchedForRef = useRef<string | undefined>(undefined);
+  // The station is anchored to the seed it was started on, and paged with a
+  // continuation token, rather than re-seeded on the latest track. Re-seeding
+  // made the genre random-walk away from the original seed over a long queue;
+  // anchoring keeps radio on-genre the way YouTube Music's own station does.
+  const radioStationSeedRef = useRef<string | undefined>(undefined);
+  const radioContinuationRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!autoRadio || repeat !== "off") {
       radioFetchedForRef.current = undefined;
+      radioStationSeedRef.current = undefined;
+      radioContinuationRef.current = undefined;
       endedRadioSeedRef.current = null;
       return;
     }
@@ -1104,11 +1174,41 @@ export function useAudioEngine() {
     if (qIndex < qLen - 1) return;
     // Loop takes priority over radio: never extend the queue while repeat
     // is on, so `next()`'s own loop logic wins instead of racing with us.
-    const requestKey = `${seedVideoId}:${radioQueueRevision}`;
+
+    const state = usePlaybackStore.getState();
+    // Adopt a station handed off by an explicit "Start radio" (context menu),
+    // so the first extension pages that station instead of re-seeding on the
+    // last pre-filled track. One-shot: clear it once adopted.
+    const handoff = state.radioStation;
+    if (handoff && state.queue.some((t) => t.videoId === handoff.seed)) {
+      radioStationSeedRef.current = handoff.seed;
+      radioContinuationRef.current = handoff.continuation;
+      state.setRadioStation(undefined);
+    }
+    // Keep paging the active station as long as its anchor seed is still
+    // somewhere in the queue (same listening session) and it has a next-page
+    // token. If the user replaced the queue with something unrelated, the
+    // anchor is gone → start a fresh station on the current track.
+    const anchorStillQueued =
+      radioStationSeedRef.current !== undefined &&
+      state.queue.some((t) => t.videoId === radioStationSeedRef.current);
+    const paging =
+      anchorStillQueued && radioContinuationRef.current !== undefined;
+
+    // Identify this specific extension attempt so a re-render storm can't fire
+    // two overlapping fetches for the same queue state.
+    const requestKey = paging
+      ? `cont:${radioContinuationRef.current}`
+      : `seed:${seedVideoId}:${qLen}`;
     if (radioFetchedForRef.current === requestKey) return;
     radioFetchedForRef.current = requestKey;
-    fetchRadio(seedVideoId)
-      .then((tracks) => {
+
+    const fetchPage = paging
+      ? fetchRadioContinuation(radioContinuationRef.current as string)
+      : fetchRadio(seedVideoId);
+
+    fetchPage
+      .then((page) => {
         // Guard against a stale fetch: the user may have replaced the queue
         // (playNow/setQueue) while the radio request was in flight. Only
         // append if this seed is still the current, last-in-queue track.
@@ -1117,7 +1217,6 @@ export function useAudioEngine() {
         if (
           !s.autoRadio ||
           s.repeat !== "off" ||
-          s.loadRevision !== radioQueueRevision ||
           cur !== seedVideoId ||
           s.index < s.queue.length - 1
         ) {
@@ -1129,7 +1228,15 @@ export function useAudioEngine() {
           }
           return;
         }
-        const rest = tracks.filter((t) => t.id !== seedVideoId);
+        // Anchor a freshly started station, then remember where it pages next.
+        if (!paging) radioStationSeedRef.current = seedVideoId;
+        radioContinuationRef.current = page.continuation;
+        // Dedupe against everything already queued, and against the page
+        // itself — a single continuation page can list the same track twice.
+        const rest = newRadioTracks(page.tracks, [
+          seedVideoId,
+          ...s.queue.map((q) => q.videoId),
+        ]);
         if (rest.length) {
           s.appendToQueue(rest, "autoplay");
           const afterAppend = usePlaybackStore.getState();
@@ -1144,8 +1251,15 @@ export function useAudioEngine() {
             endedRadioSeedRef.current = null;
             afterAppend.next();
           }
-        } else if (endedRadioSeedRef.current === seedVideoId) {
-          endedRadioSeedRef.current = null;
+        } else {
+          // Nothing new this page. If the station has no more pages, drop the
+          // anchor so the next attempt re-seeds on the current track.
+          if (!radioContinuationRef.current) {
+            radioStationSeedRef.current = undefined;
+          }
+          if (endedRadioSeedRef.current === seedVideoId) {
+            endedRadioSeedRef.current = null;
+          }
         }
       })
       .catch(() => {

@@ -55,9 +55,9 @@ Download the latest package from the [Releases](https://github.com/AnalogicGoose
 - **macOS**: macOS 14 or newer, with a universal `.dmg` for Apple Silicon and
   Intel. The current build is ad-hoc signed, so macOS may require a Gatekeeper
   override on first launch.
-- **Linux**: `.AppImage` (no install step, just `chmod +x` and run), `.deb`
-  (Debian/Ubuntu), or `.rpm` (Fedora/openSUSE). Only the AppImage build
-  auto-updates itself; the `.deb`/`.rpm` packages need a manual re-download.
+- **Linux**: `.AppImage` (no install step, just `chmod +x` and run). It carries
+  AppImage update information, so it auto-updates itself and is also picked up
+  by AppImage managers such as Gear Lever and AppImageUpdate.
 - Browsing, search, and ordinary playback work signed out wherever YouTube
   permits guest playback. Signing in adds library, likes, playlists, and the
   benefits attached to that YouTube account; Premium is not required for the

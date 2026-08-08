@@ -1,18 +1,44 @@
 # Builds Windows, Linux, and universal macOS installers and publishes a GitHub Release
 # whenever a `v*` tag is pushed. Publish flow:
 #   git tag v0.1.0 && git push origin v0.1.0
-# → wait for this workflow → review the draft on the Releases page → publish.
+# → wait for this workflow → the release publishes itself once every platform is in.
+#
+# Nothing is visible to users until the whole matrix succeeds. `create-release`
+# opens the release as a **draft**, every platform job uploads into that draft by
+# id, and `publish-release` flips it to published only after all three have
+# finished. Before this, each job appended to an already-public release, so the
+# Windows assets appeared first and Linux/macOS trickled in minutes later — and a
+# mid-run failure left a half-populated release on the Releases page.
+#
+# A tag containing a hyphen (v0.5.5-rc1) is marked as a prerelease automatically,
+# which is the intended way to smoke-test this workflow.
 #
 # The TAURI_SIGNING_* secrets are for tauri-plugin-updater artifact
-# signatures (latest.json + .sig). Until the updater is wired up and the
-# secrets are set, they resolve to empty strings and the build simply
-# skips updater artifacts.
+# signatures. Until the updater is wired up and the secrets are set, they
+# resolve to empty strings and the build simply skips updater artifacts.
 #
-# Platform jobs run sequentially: tauri-action
-# finds-or-creates a release by tag name, and two jobs racing to create it
-# for the same tag can end up creating two separate releases instead of
-# sharing one. Windows creates the release; Linux and macOS append their
-# platform artifacts in order.
+# `uploadUpdaterSignatures: false` stops the `.sig` files from being attached as
+# release assets. It does NOT disable signing: `createUpdaterArtifacts` in
+# tauri.conf.json still produces them, and tauri-action writes the identical
+# signature inline into `latest.json` — byte-for-byte the same content, verified
+# against v0.5.4. That inline copy is the only one tauri-plugin-updater reads;
+# it never fetches the `.sig` asset. The trade-off is that users can no longer
+# verify a download by hand with minisign. Re-enable it if that matters.
+# This input requires tauri-action v1; it does not exist in v0.
+#
+# Linux additionally embeds AppImage update information and uploads the matching
+# `.AppImage.zsync`, so Gear Lever and AppImageUpdate can update an installed
+# AppImage. That path is independent of tauri-plugin-updater; see build-linux.
+#
+# Platform jobs still run sequentially, and must keep doing so even though they
+# no longer race to create the release. Each one rebuilds `latest.json` by
+# downloading the copy already attached to the release and merging its own
+# platform entries into it (tauri-action's upload-version-json). That is a
+# read-modify-write, so running the jobs in parallel would let two of them read
+# the same base and the second write would drop the first one's platforms.
+# tauri-action only retries on HTTP conflicts, which does not fix a lost update.
+# Sequential execution costs wall-clock time; do not "optimize" it into a matrix
+# without moving latest.json generation into a single job.
 name: Release
 
 on:
@@ -21,7 +47,55 @@ on:
       - "v*"
 
 jobs:
+  # Opens the draft everything else uploads into, and hands down its id.
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.create.outputs.release_id }}
+    steps:
+      - name: Create draft release
+        id: create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Reuse an existing release for this tag so re-running a failed run does
+          # not pile up drafts. A draft has no git ref, so it cannot be fetched by
+          # tag; the list endpoint is the only thing that returns drafts.
+          # `|| true` because this is best-effort: a miss just means we create one.
+          id="$(gh api "repos/$REPO/releases" \
+            --jq "map(select(.tag_name == \"$TAG\")) | .[0].id // empty" || true)"
+
+          if [ -n "$id" ]; then
+            echo "::notice::Reusing existing release $id for $TAG"
+          else
+            # v0.5.5-rc1 → prerelease; v0.5.5 → normal release.
+            prerelease=false
+            case "$TAG" in *-*) prerelease=true ;; esac
+
+            # Created through the API rather than `gh release create` so the id
+            # comes straight back from the creating call. Creating and then
+            # searching the list for the new release loses the race against the
+            # API's eventual consistency: v0.5.5-rc1 created the draft fine and
+            # then found nothing in the list milliseconds later.
+            id="$(gh api --method POST "repos/$REPO/releases" \
+              -f tag_name="$TAG" \
+              -f name="Goosic $TAG" \
+              -f body="See the assets below to download and install this version." \
+              -F draft=true \
+              -F prerelease="$prerelease" \
+              --jq .id)"
+            echo "::notice::Created draft release $id (prerelease=$prerelease)"
+          fi
+          test -n "$id"
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+
   build-windows:
+    needs: create-release
     runs-on: windows-latest
     permissions:
       contents: write
@@ -37,7 +111,7 @@ jobs:
         with:
           workspaces: src-tauri
       - run: pnpm install --frozen-lockfile
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -48,17 +122,51 @@ jobs:
           YTUBIC_LASTFM_API_KEY: ${{ secrets.YTUBIC_LASTFM_API_KEY }}
           YTUBIC_LASTFM_API_SECRET: ${{ secrets.YTUBIC_LASTFM_API_SECRET }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Goosic ${{ github.ref_name }}"
-          releaseBody: "See the assets below to download and install this version."
-          releaseDraft: false
-          prerelease: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          # Not the release body — create-release already wrote that. This feeds
+          # the `notes` field of latest.json, which tauri-plugin-updater shows in
+          # the in-app update prompt. Keep the text identical in all three jobs:
+          # each one overwrites latest.json, so the last to run decides the notes.
+          releaseBody: "See the assets below to download and install this version. macOS builds are ad-hoc signed and may require a Gatekeeper override on first launch."
+          uploadUpdaterSignatures: false
 
   build-linux:
-    needs: build-windows
+    needs: [create-release, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # AppImage update information for third-party AppImage managers (Gear Lever,
+    # AppImageUpdate). tauri.conf.json has no setting for this, but tauri-bundler
+    # shells out to linuxdeploy, which inherits the environment and forwards these
+    # to `appimagetool -u`. That fills the runtime's reserved 1 KiB `.upd_info`
+    # ELF section — zeroed in every release up to v0.5.4, which is why AppImage
+    # clients reported no update information — and makes appimagetool write the
+    # matching `*.AppImage.zsync` next to the bundle.
+    #
+    # The zsync half needs `zsyncmake` on PATH, which is why the apt step above
+    # installs `zsync`. appimagetool silently skips zsync generation when it
+    # embeds the update information, so a partial failure looks like a success.
+    #
+    # Only the `.upd_info` half is taken from appimagetool. It also knows how to
+    # emit the zsync, but on this runner it never does — even with zsyncmake on
+    # PATH (the ubuntu image already ships zsync 0.6.2), which cost two release
+    # cycles to establish. The zsync is therefore generated explicitly in its own
+    # step below. That is safe in a way patching `.upd_info` would not be: the
+    # zsync is derived *from* the finished AppImage and does not modify a byte of
+    # it, so the `.sig` and `latest.json` behind tauri-plugin-updater stay valid.
+    # Verified byte-for-byte identical to appimagetool's own output.
+    #
+    # Do not patch `.upd_info` after the fact; that would invalidate the
+    # signature Tauri already produced over the AppImage.
+    #
+    # LDAI_UPDATE_INFORMATION is the current plugin's variable. The two legacy
+    # names cover the older built-in plugin tauri-bundler falls back to when the
+    # download from linuxdeploy/linuxdeploy-plugin-appimage fails. The glob must
+    # stay wildcarded because the asset name carries the version number.
+    env:
+      LDAI_UPDATE_INFORMATION: "gh-releases-zsync|AnalogicGoose|Goosic|latest|*amd64.AppImage.zsync"
+      UPDATE_INFORMATION: "gh-releases-zsync|AnalogicGoose|Goosic|latest|*amd64.AppImage.zsync"
+      UPD_INFO: "gh-releases-zsync|AnalogicGoose|Goosic|latest|*amd64.AppImage.zsync"
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -74,6 +182,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            zsync \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
@@ -89,7 +198,7 @@ jobs:
           gst-inspect-1.0 appsink
           gst-inspect-1.0 autoaudiosink
       - run: pnpm install --frozen-lockfile
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -97,11 +206,62 @@ jobs:
           YTUBIC_LASTFM_API_KEY: ${{ secrets.YTUBIC_LASTFM_API_KEY }}
           YTUBIC_LASTFM_API_SECRET: ${{ secrets.YTUBIC_LASTFM_API_SECRET }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Goosic ${{ github.ref_name }}"
-          releaseBody: "See the assets below to download and install this version."
-          releaseDraft: false
-          prerelease: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          # Not the release body — create-release already wrote that. This feeds
+          # the `notes` field of latest.json, which tauri-plugin-updater shows in
+          # the in-app update prompt. Keep the text identical in all three jobs:
+          # each one overwrites latest.json, so the last to run decides the notes.
+          releaseBody: "See the assets below to download and install this version. macOS builds are ad-hoc signed and may require a Gatekeeper override on first launch."
+          uploadUpdaterSignatures: false
+      # appimagetool embeds the update information but will not write the zsync on
+      # this runner, so it is built here from the finished AppImage. `-u` takes
+      # the bare file name, exactly as appimagetool does, so the zsync references
+      # its sibling asset relative to its own download URL.
+      - name: Generate AppImage zsync
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          zsyncmake -u "$(basename "$appimage")" -o "$appimage.zsync" "$appimage"
+
+      # Fails the release rather than shipping an AppImage that silently cannot
+      # self-update, which is what every build before this step did.
+      #
+      # Reports both checks instead of stopping at the first: whether .upd_info
+      # carries the string and whether the zsync exists are separate symptoms
+      # produced by different tools, and collapsing them hides which one broke.
+      - name: Verify AppImage update information and zsync
+        shell: bash
+        run: |
+          set -uo pipefail
+          dir=src-tauri/target/release/bundle/appimage
+          echo "--- $dir ---"
+          ls -la "$dir"
+
+          appimage="$(find "$dir" -maxdepth 1 -name '*.AppImage' -print -quit)"
+          if [ -z "$appimage" ]; then
+            echo "::error::no .AppImage found in $dir"
+            exit 1
+          fi
+
+          # Captured rather than piped into grep: `grep -q` exits on first match
+          # and would SIGPIPE readelf, which pipefail would then report as failure.
+          upd="$(readelf -p .upd_info "$appimage" 2>&1 || true)"
+          echo "--- .upd_info of $(basename "$appimage") ---"
+          echo "$upd"
+
+          rc=0
+          if ! printf '%s' "$upd" | grep -qF "$LDAI_UPDATE_INFORMATION"; then
+            echo "::error::update information is not embedded in .upd_info"
+            rc=1
+          fi
+          if [ ! -f "$appimage.zsync" ]; then
+            echo "::error::missing $(basename "$appimage").zsync"
+            rc=1
+          fi
+          [ "$rc" -eq 0 ] && echo "OK: update information embedded and zsync present"
+          exit "$rc"
       - name: Verify bundled AppImage media plugins
         shell: bash
         run: |
@@ -114,9 +274,40 @@ jobs:
           test -f squashfs-root/usr/lib/gstreamer-1.0/libgstapp.so
           test -f squashfs-root/usr/lib/gstreamer-1.0/libgstautodetect.so
           test -f squashfs-root/usr/lib/gstreamer-1.0/libgstlibav.so
+      # tauri-action only uploads what tauri-bundler reports as a bundle, and the
+      # zsync file is not one of them, so it has to be attached separately.
+      # Without this asset the embedded update information resolves to nothing and
+      # AppImage clients still report the app as non-updatable.
+      #
+      # Uploaded by release id against uploads.github.com rather than with
+      # `gh release upload <tag>`: the release is still a draft here, and a draft
+      # has no git ref to resolve the tag against.
+      - name: Upload AppImage zsync to the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          zsync="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage.zsync' -print -quit)"
+          test -n "$zsync"
+          name="$(basename "$zsync")"
+          # Replaces any previous copy, so re-running the workflow does not fail
+          # with "asset already exists". This is what `--clobber` did before.
+          existing="$(gh api "repos/$REPO/releases/$RELEASE_ID/assets" \
+            --jq "map(select(.name == \"$name\")) | .[0].id // empty")"
+          if [ -n "$existing" ]; then
+            gh api --method DELETE "repos/$REPO/releases/assets/$existing" --silent
+          fi
+          gh api --method POST \
+            -H "Content-Type: application/octet-stream" \
+            "https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets?name=$name" \
+            --input "$zsync" --silent
+          echo "Uploaded $name to release $RELEASE_ID"
 
   build-macos:
-    needs: build-linux
+    needs: [create-release, build-linux]
     runs-on: macos-15
     permissions:
       contents: write
@@ -134,7 +325,7 @@ jobs:
         with:
           workspaces: src-tauri
       - run: pnpm install --frozen-lockfile
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -145,9 +336,29 @@ jobs:
           # is valid for Apple Silicon but does not remove Gatekeeper warnings.
           APPLE_SIGNING_IDENTITY: "-"
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Goosic ${{ github.ref_name }}"
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          # See the note in build-windows: this only feeds latest.json's `notes`.
           releaseBody: "See the assets below to download and install this version. macOS builds are ad-hoc signed and may require a Gatekeeper override on first launch."
-          releaseDraft: false
-          prerelease: false
+          uploadUpdaterSignatures: false
           args: --target universal-apple-darwin --bundles app,dmg
+
+  # The single point where the release becomes visible. `needs` lists every
+  # platform job, so any failure above leaves the release as a draft that can be
+  # deleted, instead of a public half-release.
+  publish-release:
+    needs: [create-release, build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Only `draft` is touched, so the prerelease flag create-release decided
+          # from the tag name survives.
+          gh api --method PATCH "repos/$REPO/releases/$RELEASE_ID" \
+            -F draft=false --jq '"published: " + .html_url'

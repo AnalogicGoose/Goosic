@@ -4,9 +4,9 @@
 > engineering, UI, release, and troubleshooting context for this repository.
 >
 > Last verified: **2026-07-22**
-> Current app version: **0.4.7**
-> Current release candidate: **v0.4.7 official WebPlayer and offline playlists**
-> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.4.6>
+> Current app version: **0.5.3**
+> Current release candidate: **v0.5.3 macOS playback bridge and queue hardening**
+> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.5.2>
 
 ## 1. New-session quick start
 
@@ -249,7 +249,9 @@ native observer bridge.
 - `src/lib/ytdlp.ts` â€” passive managed-download setup/progress lifecycle.
 - `src/lib/query-client.ts` â€” query caching/persistence budgets.
 - `src/lib/store/playback.ts` â€” queue, history, repeat, shuffle, autoplay, and
-  playback actions. The floating window uses a remote-control bridge.
+  playback actions. The floating window uses a remote-control bridge. Persisted
+  queue rows are normalized on migration so missing legacy/dev artwork becomes
+  an empty thumbnail array rather than crashing the player shell.
 - `src/lib/store/layout.ts` â€” `right`, `bottom`, and `floating` player layout.
 - `src/lib/store/settings.ts` â€” persisted settings and Rust sync hooks,
   including the selected visual child theme.
@@ -299,7 +301,10 @@ native observer bridge.
   account's persistent profile, so YouTube's advertisements, regional limits,
   account restrictions, and entitlements remain intact.
 - The remote YouTube document has no Tauri capability. A versioned observer
-  reports playback through a secret per-launch loopback bridge. Native code
+  reports playback through a secret per-launch bridge: a loopback HTTP route on
+  Windows, the secure `goosicbridge` URI scheme on Linux, and an origin-checked
+  `WKScriptMessageHandler` on macOS, where WebKit blocks the network bridge
+  routes (see section 13). Native code
   validates the trusted Origin, secret, payload size, generation, expected
   video ID, strictly increasing per-generation sequence, and numeric values
   before emitting readiness, position, duration, volume, buffering,
@@ -626,6 +631,46 @@ frost overlay keeps only a smaller finishing backdrop blur.
 alone will not catch the regression. Any mesh change must be checked with a
 production/Tauri build.
 
+### Linux renders the mesh at quarter scale
+
+Linux runs with WebKitGTK's accelerated DMA-BUF renderer disabled
+(`src-tauri/src/main.rs`), so this background's blur is rasterized in software
+and was the app's single most expensive thing to paint. Measured with the real
+stack at 1600x900 on WebKitGTK 2.52.5:
+
+| Variant                                  | FPS  |
+| ---------------------------------------- | ---- |
+| As shipped (`blur(clamp(110px,9vw,160px))`) | 4.4  |
+| Only the outer grid transform animating  | 4.2  |
+| Nothing animating, blur kept             | 14.2 |
+| `blur(40px)` instead                     | 13.7 |
+| Animated, filter removed entirely        | 57.0 |
+
+The animation is therefore not the cost — the number of blurred pixels is.
+`MeshLayer` adds `album-mesh-lowres` when `isLinuxWebview()`, which sizes the
+`.album-mesh-scaler` host to 25% and upscales it with `transform: scale(4)`
+while quartering the blur radius to `clamp(27.5px, 2.25vw, 40px)`. The blur
+then runs over 1/16 the pixels, and because the field is pure low-frequency
+color the upscale is visually equivalent — verified by snapshotting both paths
+with animations paused. Measured against the built CSS: **5.4 -> 60.9 FPS**.
+
+Two invariants:
+
+- The reduced radius must stay exactly a quarter of the full-scale one, or the
+  upscaled field stops matching Windows/macOS. `vw` is viewport-relative, not
+  element-relative, so `2.25vw` is the correct quarter of `9vw`.
+- `.album-mesh-scaler` is always rendered, on every platform, as a
+  full-size passthrough. Both paths keep one DOM shape; only CSS differs.
+
+Enabling the DMA-BUF renderer is not an alternative. On this dev machine
+(RTX 4070 + hybrid Wayland) `WEBKIT_DISABLE_DMABUF_RENDERER=0` froze WebKit
+after the first GPU-heavy paint under Wayland, under XWayland, and with the
+iGPU forced — the safeguard in `main.rs` is still required. That is also why
+Linux keeps the flat glass fallback: a snapshot of sharp stripes under a
+`backdrop-filter` panel showed them completely unblurred even though
+`CSS.supports('backdrop-filter', 'blur(10px)')` reports `true`, which is
+exactly what `src/lib/platform.ts` documents.
+
 ## 8b. Figma Liquid Glass materials and Windows refraction
 
 The source of truth is Figma page `GLASSS` (`49:40801`) in the BBTOV file. Its
@@ -832,18 +877,63 @@ caused invalid release credentials.
 Each successful release should contain:
 
 - `Goosic_<version>_x64-setup.exe`
-- `Goosic_<version>_x64-setup.exe.sig`
-- `Goosic_<version>_amd64.AppImage` and `.sig`
-- `Goosic_<version>_amd64.deb` and `.sig`
-- `Goosic-<version>-1.x86_64.rpm` and `.sig`
+- `Goosic_<version>_amd64.AppImage`
+- `Goosic_<version>_amd64.AppImage.zsync` (AppImage self-update metadata)
 - `Goosic_<version>_universal.dmg`
-- `Goosic.app.tar.gz` and `.sig` (macOS updater artifact)
+- `Goosic.app.tar.gz` (macOS updater artifact)
 - `latest.json`
+
+Four assets plus `latest.json`, down from eleven. The `.deb`/`.rpm` bundles were
+dropped, and the `.sig` files are no longer attached as assets — see below.
+
+**Updater signatures are still generated (changed 2026-07-25).**
+`createUpdaterArtifacts: true` stays on; only the *upload* of the `.sig` files is
+disabled, via `uploadUpdaterSignatures: false` on each `tauri-action` step. That
+input requires **tauri-action v1**, which is why all three jobs moved from `@v0`
+to `@v1` (the six inputs this workflow passes all exist in v1; none of the
+eleven inputs v1 removed were used).
+
+The `.sig` assets were redundant: `tauri-action` writes the identical signature
+inline into `latest.json`, and that inline copy is the only one
+`tauri-plugin-updater` reads — it never fetches the `.sig` asset. Confirmed
+byte-for-byte against the v0.5.4 release. Do not read this as "signing was
+turned off"; disabling `createUpdaterArtifacts` instead would strip the
+`signature` field from `latest.json` and break auto-update on all three
+platforms. The only thing lost is users verifying a download by hand with
+minisign; re-enable the upload if that becomes a requirement.
 
 ## 12. Exact release procedure
 
 The release workflow is `.github/workflows/release.yml` and runs only when a
-new `v*` tag is pushed. It publishes a non-draft, non-prerelease GitHub Release.
+new `v*` tag is pushed.
+
+**The release is assembled as a draft and published atomically (changed
+2026-07-25).** The job graph is:
+
+```
+create-release ─→ build-windows ─→ build-linux ─→ build-macos ─→ publish-release
+   (draft)              (all three upload into the draft by id)      (draft=false)
+```
+
+`create-release` opens the draft and emits its numeric id; every platform job
+receives that id as `releaseId` instead of `tagName`. Nothing is visible to
+users until `publish-release` runs, so the assets no longer appear staggered
+(Windows first, macOS minutes later), and a mid-run failure leaves a deletable
+draft rather than a public half-release. A draft has no git ref, so it cannot be
+addressed by tag — this is why the id is threaded through and why the zsync
+upload goes to `uploads.github.com` by id instead of `gh release upload <tag>`.
+
+**A tag containing a hyphen is published as a prerelease** (`v0.5.5-rc1`), which
+is the supported way to smoke-test the workflow end to end. `publish-release`
+patches only `draft`, so that flag survives.
+
+**The platform jobs must stay sequential.** They no longer race to create the
+release, but each still rebuilds `latest.json` by downloading the copy attached
+to the release and merging its own platforms in. That read-modify-write means a
+parallel matrix would let two jobs read the same base and have the second write
+drop the first one's entries; tauri-action only retries HTTP conflicts, which
+does not repair a lost update. Do not convert this into a matrix without first
+moving `latest.json` generation into a single job.
 
 ### Version bump
 
@@ -963,6 +1053,20 @@ src-tauri/target/release/goosic.exe
 
 ### Linux/AppImage build contract
 
+**Linux ships the AppImage only (changed 2026-07-25).**
+`src-tauri/tauri.linux.conf.json` sets `bundle.targets` to `["appimage"]`; the
+`deb` and `rpm` targets were dropped to keep the release asset list small. The
+AppImage is unaffected by this: `tauri-bundler` stages its own Debian tree in
+`target/release/bundle/appimage_deb` as an internal step of the AppImage build,
+which is independent of the `deb` target (verified — a `--bundles appimage` run
+produces `appimage/` and `appimage_deb/` and no `deb/` or `rpm/`). Do not re-add
+`deb` on the assumption that the AppImage needs it.
+
+The consequence is that `latest.json` no longer carries `linux-x86_64-deb` or
+`linux-x86_64-rpm` entries. `tauri-plugin-updater` is unaffected because it
+resolves `linux-x86_64`/`linux-x86_64-appimage`, both of which point at the
+AppImage; those package formats never auto-updated anyway.
+
 Goosic plays audio through WebKitGTK/GStreamer. The AppImage must keep
 `bundle.linux.appimage.bundleMediaFramework: true` in `tauri.conf.json`, and
 the Ubuntu release runner must install the base, good, bad, and libav
@@ -973,6 +1077,49 @@ the window freezes or turns black.
 The release workflow verifies `appsink`/`autoaudiosink` on the build host and
 checks for `libgstapp.so`, `libgstautodetect.so`, and `libgstlibav.so` inside
 the final AppImage. Do not remove these checks as an optimization.
+
+**AppImage self-update metadata (added 2026-07-25).** Gear Lever and
+AppImageUpdate read a 1 KiB `.upd_info` ELF section in the AppImage runtime.
+Through v0.5.4 that section existed but was entirely zeroed (verified by
+`readelf -S` + a byte dump of the released asset), so those clients correctly
+reported the app as non-updatable.
+
+`tauri.conf.json` has no setting for this — `AppImageConfig` only accepts
+`bundleMediaFramework` and `files`. The injection point is the environment:
+`tauri-bundler` shells out to `linuxdeploy` inheriting the environment (the same
+property the local `OUTPUT=`/`ARCH=` workaround relies on), `linuxdeploy` passes
+it to `linuxdeploy-plugin-appimage`, and the plugin forwards
+`LDAI_UPDATE_INFORMATION` to `appimagetool -u`. The `build-linux` job sets it to
+`gh-releases-zsync|AnalogicGoose|Goosic|latest|*amd64.AppImage.zsync`, plus the
+legacy `UPDATE_INFORMATION`/`UPD_INFO` names for the older plugin tauri-bundler
+falls back to when the download fails. The glob must stay wildcarded because the
+asset name carries the version.
+
+**Only the `.upd_info` half comes from appimagetool.** It can also emit the
+`.zsync`, and does so on a local Arch box, but on the Ubuntu runner it never
+does — not even with `zsyncmake` on PATH (the runner image already ships zsync
+0.6.2, so the `zsync` apt entry is redundant belt-and-braces). Establishing that
+cost two release cycles, because appimagetool logs "zsyncmake is not
+installed/bundled, skipping", embeds the update information anyway and exits 0:
+a partial failure that looks like success.
+
+The zsync is therefore generated explicitly by a `zsyncmake` step. This is safe
+in a way that patching `.upd_info` would not be — the zsync is derived *from* the
+finished AppImage and modifies not one byte of it, so the `.sig` and
+`latest.json` behind `tauri-plugin-updater` stay valid. Its output was verified
+byte-for-byte identical to appimagetool's. Use `-u <bare file name>` so the zsync
+references its sibling asset relative to its own download URL.
+
+`tauri-action` does not upload the zsync — the bundler never reports it as a
+bundle — so a dedicated upload step attaches it. Both the embedded string and the zsync are asserted by the
+"Verify AppImage update information and zsync" step; it fails the release rather
+than shipping a silently non-updatable AppImage.
+
+This runs *inside* tauri-bundler, so the AppImage is final before Tauri signs
+it: the `.sig` and `latest.json` consumed by `tauri-plugin-updater` stay valid.
+**Do not patch `.upd_info` after the bundle is produced** — that changes the
+bytes Tauri already signed and breaks the in-app updater. The two update paths
+(AppImage clients vs. `tauri-plugin-updater`) are independent and both work.
 
 **GTK realization order (found 2026-07-22, aborted every v0.5.0 Linux play).**
 `configure_background_window`'s Linux path must call
@@ -987,11 +1134,83 @@ same function backs the account-verification window, so the ordering protects
 both. Windows and macOS are unaffected: neither uses GTK realization, and their
 `cfg` blocks legitimately call it before `show()`.
 
+**The hidden playback window is NOT hidden on KDE (open, found 2026-07-22).**
+`configure_background_window` hides the transport WebView with three
+mechanisms, and on KDE none of them work. The user sees the official YouTube
+Music page as a real, uninteractable window in Alt-Tab while Goosic plays.
+Measured on this CachyOS/KDE machine:
+
+- The session runs `GDK_BACKEND=wayland`, so `linux_uses_x11_backend()`
+  returns false and the offscreen `set_position(-32000, -32000)` is never
+  attempted.
+- `gtk_window.set_opacity(0.0)` is a **no-op on Wayland**. GTK stores the
+  value and reads it back as `0.0`, but GDK's Wayland backend has no protocol
+  to apply surface opacity, so the window paints fully opaque.
+- Forcing XWayland does not rescue it either: under `GDK_BACKEND=x11`, KWin
+  reported the window's position back as `(0, 0)`, not `-32000` — it clamps
+  windows into the visible area. The offscreen path has therefore probably
+  never worked on KDE on either backend.
+- `set_skip_taskbar` has no Wayland protocol and does not remove it from the
+  window switcher.
+
+Two constraints bound any fix, both verified against real `music.youtube.com`:
+
+- **The surface must be mapped.** With the window never mapped, YouTube Music
+  never creates its media element at all (twelve consecutive samples reporting
+  none); mapped, advertisements and then the track play normally. The
+  "a mapped GTK surface is required" comment in that function is accurate.
+- **Hiding after startup is not enough.** Playback *does* survive unmapping
+  once it has started — `currentTime` keeps advancing with
+  `document.visibilityState === "hidden"` — but a fresh navigation performed
+  while unmapped initializes nothing, and Goosic navigates this WebView on
+  every track. "Show once, then hide forever" therefore does not fit.
+
+So there is no client-side way on KDE to keep this toplevel both mapped and
+hidden. Any real fix is a trade-off (a 1×1 mapped window, a documented KWin
+rule, or reparenting the transport as a child webview) and none is implemented
+yet. Playback itself is unaffected — this is a visibility bug only.
+
 This whole function is `cfg(target_os = "linux")` and therefore **cannot be
 compile-checked from a Windows or macOS dev box** — `cargo check` there skips
 it entirely. The Ubuntu release job is the first real compile. Prefer changes
 that reuse calls already present in the file over introducing new `gdk`/`cairo`
 API surface that no local check can validate.
+
+**The observer bridge cannot rely on loopback HTTP in WebKit (found
+2026-07-22).** WebKitGTK blocks an `http://127.0.0.1` subresource of an HTTPS
+document as mixed content, so the observer's `fetch` to the loopback bridge
+never left the official page. Verified against real `music.youtube.com` in a
+WebKitWebView:
+`[blocked] The page at https://music.youtube.com/ requested insecure content
+from http://127.0.0.1:PORT/web-player/state`, and the server recorded zero
+requests. WKWebView historically treated loopback as potentially trustworthy,
+but newer macOS/WebKit builds can withhold the same request behind
+private-network policy. Chromium remains on the loopback route.
+
+The symptom is not a silent failure: the track is *audible* while React never
+receives `ready`, so the 12-second startup timer in `audio-engine.ts` fires,
+`failWebPlayback` recreates the WebPlayer and restarts the same song, and the
+second timeout surfaces "Official player startup timed out."
+
+Linux therefore carries the identical envelope over the custom URI scheme
+`goosicbridge` (`web_player::BRIDGE_SCHEME`), registered through Tauri's
+`register_asynchronous_uri_scheme_protocol`. WebKitGTK marks that scheme secure
+to lift its mixed-content block, and its `linux-body` support preserves the
+request body. macOS cannot use that fetch either because the official page's
+CSP rejects the custom scheme before wry sees a request. Its observer uses a
+`WKScriptMessageHandler` installed only on the `youtube-player` WebView. Native
+code verifies WebKit-attested main-frame origin, payload size, per-launch token,
+and route before calling the same `apply_state_event`/`apply_identity_event`
+validators used by the HTTP and Linux transports.
+
+Two details that are load-bearing:
+
+- The response must carry `Access-Control-Allow-Origin`. The scheme is
+  cross-origin to the page, and the observer reads `response.ok` to confirm a
+  terminal `ended` event was delivered; without the header the fetch rejects
+  and that bookkeeping never runs.
+- `WebKitSettings:allow-running-of-insecure-content` is **gone** from current
+  WebKitGTK (verified absent on 2.52.5). Do not reach for it as a shortcut.
 
 Building an AppImage locally on Arch/CachyOS has a separate `linuxdeploy`
 `strip`/`.relr.dyn` incompatibility. See
@@ -1066,6 +1285,17 @@ These were present and non-blocking at the `v0.3.6` release:
   effects involving `filter`, `backdrop-filter`, isolation, or large layers.
 - The Windows installer is not Authenticode code-signed, so SmartScreen may
   warn. Updater artifacts are separately signed with Tauri's signing key.
+- On Linux the console prints two harmless third-party messages that are not
+  Goosic's and are not playback failures. `libayatana-appindicator is
+  deprecated` comes from the library itself, pulled in by Tauri's `tray-icon`
+  feature. Bursts of `gst_value_collect_int_range: assertion ... failed` /
+  `range start is not smaller than end` come from `WebKitWebProcess` building a
+  degenerate `GstIntRange` (min >= max) while enumerating codecs; GStreamer
+  drops that caps field and continues. Goosic links no GStreamer code, and
+  `gst-inspect-1.0 -a` over the installed plugins reports none of these, so
+  there is nothing to fix in this repository. Do not read them as the
+  `appsink`/`autoaudiosink` packaging failure below — that one has a different
+  signature and does break playback.
 - AppImage media playback requires bundled GStreamer plugins. The exact
   `appsink not found` / `autoaudiosink not found` plus GLib null-pointer
   signature is a packaging failure, not harmless MPRIS noise. See
@@ -1129,7 +1359,21 @@ persisted and synchronized across native windows.
 
 ## 18. Recent release history
 
-- **Unreleased `v0.4.7`** â€” moves ordinary playback to an official persistent
+- **`v0.5.3`** â€” moves WKWebView observer envelopes
+  from blocked network fetches to an origin-checked native script-message
+  handler. This fixes audio playing while readiness/timeline events are absent,
+  followed by the 12-second restart and final official-player error.
+- **`v0.5.2`** â€” makes Linux playback actually work. The observer bridge moves
+  to a secure custom URI scheme because WebKitGTK blocks its loopback HTTP as
+  mixed content (section 13), which had left every track audible but stuck on a
+  loading spinner until it timed out and restarted. The album mesh rasterizes at
+  quarter scale on Linux (5.4 -> 60.9 FPS, section 8), and Settings shows the
+  running version. Ships with the open KDE stray-window bug in section 13.
+- `v0.5.1` â€” fixed the Linux SIGABRT on first play (GTK realization order) and
+  the macOS stuck loading spinner.
+- `v0.5.0` â€” official YouTube Music WebPlayer as the sole online backend,
+  album mesh background, and GitHub-driven release notes.
+- **`v0.4.7`** â€” moved ordinary playback to an official persistent
   YouTube Music WebPlayer on Windows, macOS, and Linux, opening playback to
   guests and free accounts while preserving advertisements and restrictions.
   Offline audio becomes an explicit Premium-only playlist download with

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-playback-log"
+description = "Enables the save_playback_log command without any pre-configured scope."
+commands.allow = ["save_playback_log"]
+
+[[permission]]
+identifier = "deny-save-playback-log"
+description = "Denies the save_playback_log command without any pre-configured scope."
+commands.deny = ["save_playback_log"]

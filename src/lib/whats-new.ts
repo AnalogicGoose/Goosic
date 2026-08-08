@@ -38,6 +38,84 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.5.8",
+    date: "August 2026",
+    sections: [
+      {
+        heading: "Fixes",
+        items: [
+          "Radio could still repeat a song. A batch of recommendations that happened to list the same track twice slipped both copies into the queue, so it played again a moment later.",
+          "macOS showed the playing song twice in Control Center and on the lock screen, with the two cards disagreeing about whether it was playing or paused. Only Goosic's own card is published now.",
+          "Saving a playback log failed with a permissions error, which meant the one tool for reporting playback problems did not work. It saves properly now.",
+        ],
+      },
+      {
+        heading: "Glass everywhere",
+        items: [
+          "Buttons, dropdowns and the settings selectors now use the same glass as the player instead of a flat outline, so nothing looks out of place next to it.",
+          "The controls in the title bar sit together in one frame, with the menu and sidebar buttons grouped apart from back and forward.",
+        ],
+      },
+      {
+        heading: "Still chasing a bug?",
+        body: "If a song ever repeats or playback gets stuck, open Settings, then General, and use Save log near the bottom. Send that file along with your report. It records only track ids and player state, and nothing is uploaded anywhere unless you share the file yourself.",
+      },
+    ],
+  },
+  {
+    version: "0.5.7",
+    date: "August 2026",
+    sections: [
+      {
+        heading: "Real glass on macOS",
+        items: [
+          "Glass surfaces now use macOS's own materials, so menus, popovers and the player bar genuinely refract what is behind the window instead of only blurring it.",
+          "Appearance settings let you pick the material: three Liquid Glass options on macOS 26 and later, plus the five classic ones from Ultra thin through Chrome.",
+          "Older versions of macOS get the classic materials rather than the previous plain blur.",
+        ],
+      },
+      {
+        heading: "Reporting playback bugs",
+        items: [
+          "Settings now has a Playback log you can save and send along when something goes wrong with playback. It records track ids and player state only, and nothing leaves your machine unless you share the file yourself.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.5.6",
+    date: "July 2026",
+    sections: [
+      {
+        heading: "Better radio",
+        items: [
+          "Radio autoplay now stays on the station you started, the way YouTube Music does, instead of slowly drifting into other genres over a long queue.",
+          "Songs no longer repeat while radio keeps the queue going.",
+        ],
+      },
+    ],
+  },
+  {
+    version: "0.5.2",
+    date: "July 2026",
+    sections: [
+      {
+        heading: "Linux",
+        items: [
+          "Fixed playback on Linux never being detected: the song played while Goosic sat on a loading spinner, timed out, restarted the track, and then reported an error.",
+          "The ambient background is far smoother on Linux, where it used to make the whole window crawl.",
+          "Known issue: a stray YouTube Music window can appear in Alt-Tab while a track plays. It is harmless and playback is unaffected.",
+        ],
+      },
+      {
+        heading: "Elsewhere",
+        items: [
+          "Settings now shows which version of Goosic you are running, with a button to check for updates.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.5.1",
     date: "July 2026",
     sections: [

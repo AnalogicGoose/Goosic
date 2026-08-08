@@ -157,6 +157,16 @@ pub struct PlaybackStateEvent {
     pub version: u8,
     pub generation: u64,
     pub sequence: u64,
+    /// Monotonic id of the concrete media element the observer is attached to.
+    /// Bumped on a genuine `<video>`/`<audio>` replacement. Informational: it
+    /// rides through to React for the diagnostics timeline and is not a gate.
+    #[serde(default)]
+    pub media_generation: u64,
+    /// Observer-side high-resolution issue time (ms). Secondary ordering signal
+    /// for the diagnostics timeline; identity/ordering are enforced by
+    /// generation + sequence.
+    #[serde(default)]
+    pub event_at: f64,
     pub video_id: String,
     pub actual_video_id: Option<String>,
     pub ready: bool,
@@ -201,13 +211,17 @@ pub fn bridge_router(app: tauri::AppHandle, state: WebPlayerState) -> Router {
         .with_state((app, state))
 }
 
+fn trusted_bridge_origin(headers: &HeaderMap) -> Option<&HeaderValue> {
+    headers.get("origin").filter(|value| {
+        matches!(
+            value.to_str(),
+            Ok("https://music.youtube.com") | Ok("https://www.youtube.com")
+        )
+    })
+}
+
 fn trusted_bridge_request(headers: &HeaderMap) -> bool {
-    headers
-        .get("origin")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|origin| {
-            origin == "https://music.youtube.com" || origin == "https://www.youtube.com"
-        })
+    trusted_bridge_origin(headers).is_some()
         && headers
             .get(BRIDGE_HEADER)
             .and_then(|value| value.to_str().ok())
@@ -217,10 +231,24 @@ fn trusted_bridge_request(headers: &HeaderMap) -> bool {
 async fn bridge_state(
     State((app, state)): State<(tauri::AppHandle, WebPlayerState)>,
     headers: HeaderMap,
-    Json(mut payload): Json<PlaybackStateEvent>,
+    Json(payload): Json<PlaybackStateEvent>,
 ) -> StatusCode {
-    if !trusted_bridge_request(&headers)
-        || payload.version != BRIDGE_VERSION
+    if !trusted_bridge_request(&headers) {
+        return StatusCode::FORBIDDEN;
+    }
+    apply_state_event(&app, &state, payload).await
+}
+
+/// Validate and publish one observer envelope. Every transport shares this:
+/// Windows loopback HTTP, Linux's secure custom scheme, and the macOS script
+/// message handler. Callers must have already established that the request
+/// came from a trusted origin.
+async fn apply_state_event(
+    app: &tauri::AppHandle,
+    state: &WebPlayerState,
+    mut payload: PlaybackStateEvent,
+) -> StatusCode {
+    if payload.version != BRIDGE_VERSION
         || !payload.position.is_finite()
         || !payload.duration.is_finite()
         || !payload.volume.is_finite()
@@ -299,6 +327,10 @@ async fn bridge_state(
     payload.position = payload.position.max(0.0);
     payload.duration = payload.duration.max(0.0);
     payload.volume = payload.volume.clamp(0.0, 1.0);
+    // Informational only; never fail the envelope over a bad timestamp.
+    if !payload.event_at.is_finite() {
+        payload.event_at = 0.0;
+    }
     if let Some(error) = payload.error.as_mut() {
         *error = error.chars().take(240).collect();
     }
@@ -313,7 +345,16 @@ async fn bridge_identity(
     headers: HeaderMap,
     Json(payload): Json<IdentityStateEvent>,
 ) -> StatusCode {
-    if !trusted_bridge_request(&headers) || payload.version != BRIDGE_VERSION {
+    if !trusted_bridge_request(&headers) {
+        return StatusCode::FORBIDDEN;
+    }
+    apply_identity_event(&state, payload).await
+}
+
+/// Record the one identity boolean a probe document may report. Shared by the
+/// loopback route and the Linux custom scheme, as [`apply_state_event`] is.
+async fn apply_identity_event(state: &WebPlayerState, payload: IdentityStateEvent) -> StatusCode {
+    if payload.version != BRIDGE_VERSION {
         return StatusCode::FORBIDDEN;
     }
 
@@ -327,6 +368,119 @@ async fn bridge_identity(
     // the waiter arms, avoiding the lost-wakeup behavior of `notify_waiters`.
     state.identity_notify.notify_one();
     StatusCode::NO_CONTENT
+}
+
+/// Addressing shared by the WebKit observer transports.
+///
+/// WebKitGTK refuses to load an `http://127.0.0.1` subresource from the
+/// official page's HTTPS document: the observer's `fetch` is blocked as mixed
+/// content before it leaves the page, so not one sample reaches the loopback
+/// server. WKWebView can likewise withhold the loopback request behind
+/// private-network policy. In both cases playback is audible while React never
+/// sees `ready`, times the track out, and tears the WebPlayer down mid-song.
+/// Chromium keeps the loopback route. Linux sends to the app-owned protocol;
+/// macOS uses that protocol-shaped URL only as an authenticated address carried
+/// inside its WKScriptMessageHandler envelope.
+///
+/// On Linux, wry registers the custom URI scheme with WebKit's security manager
+/// as secure, which lifts the mixed-content block. On macOS, page CSP rejects a
+/// fetch to the custom scheme, so the script-message handler routes the same
+/// token, route, and JSON body to the shared validators without a network hop.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub const BRIDGE_SCHEME: &str = "goosicbridge";
+
+/// Mirrors the loopback router's `DefaultBodyLimit`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const BRIDGE_BODY_LIMIT: usize = 16 * 1024;
+
+/// Address the observer and identity probe post their envelopes to. `route` is
+/// `state` or `identity`; `port` addresses the loopback server on Windows.
+pub fn bridge_endpoint(port: u16, token: &str, route: &str) -> String {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let _ = port;
+        format!("{BRIDGE_SCHEME}://bridge/{token}/web-player/{route}")
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        format!("http://127.0.0.1:{port}/{token}/web-player/{route}")
+    }
+}
+
+/// Answer one custom-scheme bridge request.
+///
+/// Applies the same gates the loopback router does — trusted origin, the
+/// bridge header, the per-launch secret in the path, POST only, and the 16 KiB
+/// envelope limit — plus one the HTTP route cannot express: the playback
+/// WebView is the only webview allowed to reach this scheme. Linux-only:
+/// macOS reaches native code through `install_message_bridge` instead, since
+/// WebKit refuses the custom-scheme `fetch` outright.
+#[cfg(target_os = "linux")]
+pub async fn serve_bridge_scheme(
+    app: &tauri::AppHandle,
+    state: &WebPlayerState,
+    webview_label: &str,
+    token: &str,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let status = bridge_scheme_status(app, state, webview_label, token, &request).await;
+    let builder = tauri::http::Response::builder().status(status);
+    // The document is cross-origin to this scheme, so its `fetch` resolves —
+    // and the observer only learns a terminal event landed — when the response
+    // opts that origin in. An untrusted caller is refused without one.
+    let builder = match trusted_bridge_origin(request.headers()) {
+        Some(origin) => builder
+            .header("access-control-allow-origin", origin.clone())
+            .header("vary", "Origin"),
+        None => builder,
+    };
+    builder.body(Vec::new()).unwrap_or_else(|_| {
+        let mut response = tauri::http::Response::new(Vec::new());
+        *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+        response
+    })
+}
+
+#[cfg(target_os = "linux")]
+async fn bridge_scheme_status(
+    app: &tauri::AppHandle,
+    state: &WebPlayerState,
+    webview_label: &str,
+    token: &str,
+    request: &tauri::http::Request<Vec<u8>>,
+) -> StatusCode {
+    if token.is_empty()
+        || webview_label != PLAYER_LABEL
+        || request.method() != Method::POST
+        || !trusted_bridge_request(request.headers())
+        || request.body().len() > BRIDGE_BODY_LIMIT
+    {
+        return StatusCode::FORBIDDEN;
+    }
+    let Some(route) = bridge_scheme_route(request.uri().path(), token) else {
+        return StatusCode::FORBIDDEN;
+    };
+    match route {
+        "state" => match serde_json::from_slice(request.body()) {
+            Ok(payload) => apply_state_event(app, state, payload).await,
+            Err(_) => StatusCode::BAD_REQUEST,
+        },
+        "identity" => match serde_json::from_slice(request.body()) {
+            Ok(payload) => apply_identity_event(state, payload).await,
+            Err(_) => StatusCode::BAD_REQUEST,
+        },
+        _ => StatusCode::NOT_FOUND,
+    }
+}
+
+/// Strip the secret prefix the loopback router expresses as a `nest`, leaving
+/// the route name. `None` means the request did not carry this launch's token.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn bridge_scheme_route<'a>(path: &'a str, token: &str) -> Option<&'a str> {
+    path.strip_prefix('/')?
+        .strip_prefix(token)?
+        .strip_prefix("/web-player/")
+        .filter(|route| !route.is_empty())
 }
 
 fn observer_script(bridge_url: &str) -> String {
@@ -365,7 +519,25 @@ fn observer_script(bridge_url: &str) -> String {
     window.onbeforeunload = null;
   }}
   const bridge = {bridge};
-  const send = window.fetch.bind(window);
+  const nativeFetch = window.fetch.bind(window);
+  // WKWebView rejects fetch() from this https document to both loopback HTTP
+  // and app-owned schemes, so macOS reports through a script message handler
+  // installed on the user content controller right after the WebView is
+  // created. Resolved per call: that install can land a tick after this
+  // document-start script runs. Other platforms fall through to fetch.
+  const send = (target, options) => {{
+    const wk = window.webkit && window.webkit.messageHandlers;
+    const native = wk && wk.goosicBridge;
+    if (native) {{
+      try {{
+        native.postMessage(JSON.stringify({{ url: target, body: (options && options.body) || '' }}));
+        return Promise.resolve({{ ok: true }});
+      }} catch (error) {{
+        return Promise.reject(error);
+      }}
+    }}
+    return nativeFetch(target, options);
+  }};
   const url = new URL(location.href);
   const fragment = new URLSearchParams(url.hash.replace(/^#/, ''));
   const fromUrl = (name) => url.searchParams.get(name) || fragment.get(name) || '';
@@ -442,7 +614,11 @@ fn observer_script(bridge_url: &str) -> String {
         get() {{ return volumeDescriptor.get.call(this); }},
         set(value) {{
           const requested = Number(value);
-          const ceiling = desiredState.volume;
+          // After the requested track finishes, nothing in this document
+          // should be audible (see the play() override below), so the ceiling
+          // drops to zero — this closes the "page assigns volume to a fresh
+          // element before any sample runs" window for its autoplay pick too.
+          const ceiling = (pendingContentEnded || reportedTrackEnded) ? 0 : desiredState.volume;
           volumeDescriptor.set.call(
             this,
             Number.isFinite(requested) ? Math.min(Math.max(requested, 0), ceiling) : ceiling
@@ -465,7 +641,19 @@ fn observer_script(bridge_url: &str) -> String {
   try {{
     const nativePlay = HTMLMediaElement.prototype.play;
     HTMLMediaElement.prototype.play = function (...args) {{
-      applyDesiredVolume(this);
+      // Once the requested track has finished, the only thing that can call
+      // play() in this document is the official page's OWN autoplay pick (or a
+      // spurious rewind of the just-finished element). Goosic navigates this
+      // WebView to the real next track in a fresh document, so nothing here
+      // should ever be audible again. Mute at the source: the reactive pause()
+      // in the sample loop is up to one 250ms tick behind, which is exactly
+      // the audible burst of the wrong song the user heard between tracks.
+      if (pendingContentEnded || reportedTrackEnded) {{
+        try {{ this.muted = true; }} catch {{}}
+        try {{ this.volume = 0; }} catch {{}}
+      }} else {{
+        applyDesiredVolume(this);
+      }}
       return nativePlay.apply(this, args);
     }};
   }} catch {{}}
@@ -478,6 +666,13 @@ fn observer_script(bridge_url: &str) -> String {
   }};
   let initialized = false;
   let attachedMedia = null;
+  // A monotonic id for the concrete <video>/<audio> element currently attached.
+  // YouTube Music is a SPA and can swap the media element without a navigation;
+  // this lets the diagnostics timeline (and any future consumer) tell a genuine
+  // element replacement apart from an in-place update, the way Kaset's media
+  // occurrence does. Informational only — identity is still enforced by
+  // generation + sequence + requested/actual video id upstream.
+  let mediaGeneration = 0;
   let requestedContentMedia = null;
   let autoplayAttempts = 0;
   let pendingContentEnded = false;
@@ -524,9 +719,36 @@ fn observer_script(bridge_url: &str) -> String {
     }} catch {{}}
     return null;
   }};
+  // Silence the official page's own Now Playing entry.
+  //
+  // Neutering the action handlers only stops the page from *reacting* to media
+  // keys. The OS entry itself is published through `metadata`/`playbackState`,
+  // so leaving those writable put a second card next to the one Goosic drives
+  // from Rust -- and because nothing keeps the two in step, they disagree:
+  // macOS Control Center showed the same song twice, one offering pause and
+  // the other play. Goosic never reads this session (identity comes from the
+  // player API and the page URL, transport from souvlaki), so blocking it
+  // outright costs nothing.
+  //
+  // Clear whatever is already set through the real accessors first, then
+  // shadow them on the instance so later writes are dropped. This runs as an
+  // initialization script, ahead of the page's own code, and `configurable`
+  // keeps it idempotent if it is ever evaluated twice.
   try {{
-    if (navigator.mediaSession?.setActionHandler) {{
-      navigator.mediaSession.setActionHandler = () => {{}};
+    const session = navigator.mediaSession;
+    if (session) {{
+      session.setActionHandler = () => {{}};
+      try {{ session.metadata = null; }} catch {{}}
+      try {{ session.playbackState = 'none'; }} catch {{}}
+      for (const [prop, frozen] of [['metadata', null], ['playbackState', 'none']]) {{
+        try {{
+          Object.defineProperty(session, prop, {{
+            configurable: true,
+            get: () => frozen,
+            set: () => {{}},
+          }});
+        }} catch {{}}
+      }}
     }}
   }} catch {{}}
   try {{
@@ -582,6 +804,7 @@ fn observer_script(bridge_url: &str) -> String {
     const media = findMedia();
     if (media && media !== attachedMedia) {{
       attachedMedia = media;
+      mediaGeneration += 1;
       initialized = false;
       autoplayAttempts = 0;
       const observedMedia = media;
@@ -715,10 +938,14 @@ fn observer_script(bridge_url: &str) -> String {
     }}
     pendingError = null;
     lastObservedAd = ad;
+    let eventAt;
+    try {{ eventAt = performance.timeOrigin + performance.now(); }} catch {{ eventAt = Date.now(); }}
     const body = {{
       version: {BRIDGE_VERSION},
       generation,
       sequence: nextSequence(),
+      mediaGeneration,
+      eventAt,
       videoId: requestedVideoId,
       actualVideoId,
       ready: !!media && media.readyState >= 1,
@@ -797,10 +1024,23 @@ fn identity_probe_script(
       ? pieces[1] === ''
       : pieces[0] === expectedPageId && pieces[1].length > 0;
     sent = true;
+    const payload = JSON.stringify({{ version: {BRIDGE_VERSION}, generation: {generation}, matches }});
+    // Same macOS transport split as the playback observer: script message
+    // handler when native installed one, fetch elsewhere.
+    const wk = window.webkit && window.webkit.messageHandlers;
+    const native = wk && wk.goosicBridge;
+    if (native) {{
+      try {{
+        native.postMessage(JSON.stringify({{ url: bridge, body: payload }}));
+      }} catch {{
+        sent = false;
+      }}
+      return;
+    }}
     window.fetch(bridge, {{
       method: 'POST',
       headers: {{ 'content-type': 'application/json', '{BRIDGE_HEADER}': '1' }},
-      body: JSON.stringify({{ version: {BRIDGE_VERSION}, generation: {generation}, matches }}),
+      body: payload,
       cache: 'no-store'
     }}).catch(() => {{ sent = false; }});
   }};
@@ -1275,6 +1515,14 @@ pub async fn select_identity(
             return Err("could not start account verification".into());
         }
     };
+    // The identity probe posts through the same macOS transport as the
+    // playback observer; without the handler its boolean never arrives.
+    #[cfg(target_os = "macos")]
+    if let Err(error) = install_message_bridge(&verification_window, state, &bridge_url) {
+        let _ = close_player(app).await;
+        clear_identity_result(state, identity_generation).await;
+        return Err(error);
+    }
     if activate_background_window(app, &verification_window)
         .await
         .is_err()
@@ -1519,6 +1767,13 @@ pub async fn load(
         let window = builder
             .build()
             .map_err(|error| format!("build YouTube player: {error}"))?;
+        // Attach the script-message transport before the page can post its
+        // first observer sample (the JS side resolves the handler per call).
+        #[cfg(target_os = "macos")]
+        if let Err(error) = install_message_bridge(&window, state, &bridge_url) {
+            let _ = close_player(app).await;
+            return Err(error);
+        }
         if let Err(error) = activate_background_window(app, &window).await {
             let _ = close_player(app).await;
             return Err(error);
@@ -1578,6 +1833,210 @@ pub async fn reset(app: &tauri::AppHandle, state: &WebPlayerState) -> Result<(),
     Ok(())
 }
 
+/// macOS transport for the observer bridge.
+///
+/// WKWebView rejects a `fetch` from the official https document to every
+/// address native code can serve: loopback HTTP falls to private-network
+/// policy, and a custom URI scheme is refused inside WebKit before the
+/// registered scheme handler can observe it (verified 2026-07-22: the page
+/// loads, the observer runs, and zero requests — not even a CORS preflight —
+/// reach the handler; the page's CSP would forbid the connect anyway). The
+/// sanctioned any-origin channel from page JS to native is a
+/// `WKScriptMessageHandler` on the WebView's user content controller, which
+/// mixed-content, private-network, and CSP policy do not apply to.
+///
+/// The observer posts the same envelope it would have POSTed — the bridge URL
+/// (still carrying the per-launch token) plus the JSON body — through
+/// `window.webkit.messageHandlers.goosicBridge`. Validation mirrors the other
+/// transports: main frame only, trusted https origin (WebKit-attested, not a
+/// forgeable header), the 16 KiB limit, and the token/route gate via
+/// `bridge_scheme_route`, before the shared `apply_state_event` /
+/// `apply_identity_event` run. Only the two `youtube-player` window creation
+/// sites install the handler, so no other webview can reach it.
+#[cfg(target_os = "macos")]
+mod wk_message_bridge {
+    use objc2::rc::Retained;
+    use objc2::runtime::ProtocolObject;
+    use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
+    use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSString};
+    use objc2_web_kit::{
+        WKScriptMessage, WKScriptMessageHandler, WKUserContentController, WKWebView,
+    };
+
+    use super::{
+        apply_identity_event, apply_state_event, bridge_scheme_route, StatusCode, WebPlayerState,
+        BRIDGE_BODY_LIMIT, BRIDGE_SCHEME,
+    };
+
+    /// Must match the `messageHandlers` property the injected scripts use.
+    const MESSAGE_HANDLER_NAME: &str = "goosicBridge";
+
+    /// The token segment of a bridge endpoint URL
+    /// (`goosicbridge://bridge/<token>/web-player/<route>`).
+    pub(super) fn bridge_url_token(bridge_url: &str) -> Option<&str> {
+        let path = bridge_url
+            .strip_prefix(BRIDGE_SCHEME)?
+            .strip_prefix("://bridge/")?;
+        let token = path.split('/').next()?;
+        (!token.is_empty()).then_some(token)
+    }
+
+    #[derive(serde::Deserialize)]
+    struct WkEnvelope {
+        url: String,
+        body: String,
+    }
+
+    pub(super) struct BridgeIvars {
+        app: tauri::AppHandle,
+        state: WebPlayerState,
+        token: String,
+    }
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "GoosicWebPlayerBridge"]
+        #[ivars = BridgeIvars]
+        pub(super) struct BridgeHandler;
+
+        unsafe impl NSObjectProtocol for BridgeHandler {}
+
+        unsafe impl WKScriptMessageHandler for BridgeHandler {
+            #[unsafe(method(userContentController:didReceiveScriptMessage:))]
+            fn did_receive_script_message(
+                &self,
+                _controller: &WKUserContentController,
+                message: &WKScriptMessage,
+            ) {
+                // Synchronous part stays minimal: extract and gate on the
+                // WebKit-attested facts (frame, origin, size), then hand the
+                // string to the async runtime for parsing and routing.
+                let body = unsafe { message.body() };
+                let Some(raw) = body.downcast_ref::<NSString>().map(|s| s.to_string()) else {
+                    return;
+                };
+                if raw.len() > BRIDGE_BODY_LIMIT {
+                    return;
+                }
+                let frame = unsafe { message.frameInfo() };
+                if !unsafe { frame.isMainFrame() } {
+                    return;
+                }
+                let origin = unsafe { frame.securityOrigin() };
+                let scheme = unsafe { origin.protocol() }.to_string();
+                let host = unsafe { origin.host() }.to_string();
+                if scheme != "https"
+                    || !matches!(host.as_str(), "music.youtube.com" | "www.youtube.com")
+                {
+                    return;
+                }
+                let ivars = self.ivars();
+                let app = ivars.app.clone();
+                let state = ivars.state.clone();
+                let token = ivars.token.clone();
+                tauri::async_runtime::spawn(async move {
+                    route_message(app, state, token, raw).await;
+                });
+            }
+        }
+    );
+
+    impl BridgeHandler {
+        fn new(
+            mtm: MainThreadMarker,
+            app: tauri::AppHandle,
+            state: WebPlayerState,
+            token: String,
+        ) -> Retained<Self> {
+            let this = mtm
+                .alloc::<Self>()
+                .set_ivars(BridgeIvars { app, state, token });
+            unsafe { msg_send![super(this), init] }
+        }
+    }
+
+    async fn route_message(
+        app: tauri::AppHandle,
+        state: WebPlayerState,
+        token: String,
+        raw: String,
+    ) {
+        let Ok(envelope) = serde_json::from_str::<WkEnvelope>(&raw) else {
+            return;
+        };
+        let prefix = format!("{BRIDGE_SCHEME}://bridge");
+        let Some(path) = envelope.url.strip_prefix(&prefix) else {
+            return;
+        };
+        let Some(route) = bridge_scheme_route(path, &token) else {
+            return;
+        };
+        let status = match route {
+            "state" => match serde_json::from_str(&envelope.body) {
+                Ok(payload) => apply_state_event(&app, &state, payload).await,
+                Err(_) => StatusCode::BAD_REQUEST,
+            },
+            "identity" => match serde_json::from_str(&envelope.body) {
+                Ok(payload) => apply_identity_event(&state, payload).await,
+                Err(_) => StatusCode::BAD_REQUEST,
+            },
+            _ => StatusCode::NOT_FOUND,
+        };
+        // A rejected sample (stale generation, malformed body) is expected
+        // during track changes and simply not published; the observer keeps
+        // sampling. Nothing to surface here — the status is for parity with
+        // the HTTP transports' return type.
+        let _ = status;
+    }
+
+    /// Attach the message handler to a freshly created player/probe WebView.
+    /// Runs on AppKit's main thread via `with_webview`; the content controller
+    /// retains the handler for the WebView's lifetime.
+    pub(super) fn install(
+        webview: tauri::webview::PlatformWebview,
+        app: tauri::AppHandle,
+        state: WebPlayerState,
+        token: String,
+    ) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            eprintln!("[web-player] bridge handler skipped: not on the main thread");
+            return;
+        };
+        unsafe {
+            let wk: &WKWebView = &*webview.inner().cast::<WKWebView>();
+            let controller = wk.configuration().userContentController();
+            let handler = BridgeHandler::new(mtm, app, state, token);
+            controller.addScriptMessageHandler_name(
+                ProtocolObject::from_ref(&*handler),
+                &NSString::from_str(MESSAGE_HANDLER_NAME),
+            );
+        }
+    }
+}
+
+/// Register the macOS script-message transport on a just-built player or
+/// identity-probe window. A failure is a hard error: without the handler the
+/// observer cannot report and playback would repeat the silent-stall bug.
+#[cfg(target_os = "macos")]
+fn install_message_bridge(
+    window: &tauri::WebviewWindow,
+    state: &WebPlayerState,
+    bridge_url: &str,
+) -> Result<(), String> {
+    let Some(token) = wk_message_bridge::bridge_url_token(bridge_url) else {
+        return Err("malformed bridge endpoint".into());
+    };
+    let app = window.app_handle().clone();
+    let state = state.clone();
+    let token = token.to_string();
+    window
+        .with_webview(move |webview| {
+            wk_message_bridge::install(webview, app, state, token);
+        })
+        .map_err(|error| format!("install macOS playback bridge: {error}"))
+}
+
 pub async fn uses_profile(state: &WebPlayerState, profile_key: &str) -> bool {
     state.inner.lock().await.profile_key == profile_key
 }
@@ -1595,14 +2054,68 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        actual_video_matches_requested, control_script, gate_ended_event, heartbeat_is_fresh,
-        is_unexpected_track, load_state_script, observer_script, playback_url, sequence_is_fresh,
-        trusted_navigation, wait_for_identity_result, WebPlayerState, HEALTH_HEARTBEAT_TIMEOUT,
+        actual_video_matches_requested, bridge_endpoint, bridge_scheme_route, control_script,
+        gate_ended_event, heartbeat_is_fresh, is_unexpected_track, load_state_script,
+        observer_script, playback_url, sequence_is_fresh, trusted_navigation,
+        wait_for_identity_result, WebPlayerState, HEALTH_HEARTBEAT_TIMEOUT,
         WINDOWS_WS_EX_APPWINDOW, WINDOWS_WS_EX_NOACTIVATE, WINDOWS_WS_EX_TOOLWINDOW,
     };
 
     #[cfg(any(target_os = "linux", test))]
     use super::linux_uses_x11_backend;
+
+    /// Whatever transport the platform uses, the address the observer is given
+    /// must be the one the bridge's own secret gate accepts.
+    #[test]
+    fn bridge_endpoint_carries_the_route_past_the_secret_gate() {
+        let endpoint = bridge_endpoint(1234, "s3cret", "state");
+        let path = endpoint
+            .parse::<tauri::Url>()
+            .expect("endpoint is a URL")
+            .path()
+            .to_string();
+        assert_eq!(bridge_scheme_route(&path, "s3cret"), Some("state"));
+    }
+
+    /// The macOS script-message transport pulls the per-launch token straight
+    /// out of the endpoint URL, so it must recover exactly what
+    /// `bridge_endpoint` embedded (and reject anything else).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn wk_bridge_recovers_the_token_from_its_own_endpoint() {
+        use super::wk_message_bridge::bridge_url_token;
+        let endpoint = bridge_endpoint(0, "s3cret", "state");
+        assert_eq!(bridge_url_token(&endpoint), Some("s3cret"));
+        assert_eq!(
+            bridge_url_token("goosicbridge://bridge//web-player/state"),
+            None
+        );
+        assert_eq!(bridge_url_token("https://music.youtube.com/"), None);
+    }
+
+    #[test]
+    fn bridge_scheme_route_rejects_foreign_or_malformed_paths() {
+        assert_eq!(
+            bridge_scheme_route("/s3cret/web-player/identity", "s3cret"),
+            Some("identity")
+        );
+        // A different launch's secret, and a prefix that merely starts with it.
+        assert_eq!(
+            bridge_scheme_route("/other/web-player/state", "s3cret"),
+            None
+        );
+        assert_eq!(
+            bridge_scheme_route("/s3cretly/web-player/state", "s3cret"),
+            None
+        );
+        // The secret alone authorizes nothing without a named route.
+        assert_eq!(bridge_scheme_route("/s3cret/web-player/", "s3cret"), None);
+        assert_eq!(bridge_scheme_route("/s3cret/stream/abc", "s3cret"), None);
+        assert_eq!(
+            bridge_scheme_route("s3cret/web-player/state", "s3cret"),
+            None
+        );
+    }
 
     #[test]
     fn navigation_allowlist_rejects_untrusted_origins() {
@@ -1779,6 +2292,30 @@ mod tests {
         // WKWebView and WebKitGTK can leave `playerApi` undefined while playing
         // normally, so identity must have a second source.
         assert!(script.contains("new URL(location.href).searchParams.get('v')"));
+    }
+
+    #[test]
+    fn observer_blocks_the_pages_own_now_playing_entry() {
+        let script = observer_script("http://127.0.0.1:1234/secret/web-player/state");
+        // Suppressing only the action handlers still let the page publish its
+        // own OS entry, which appeared beside Goosic's and disagreed with it
+        // about play/pause. Both metadata sources have to be shut off.
+        assert!(script.contains("session.setActionHandler = () => {}"));
+        assert!(script.contains("session.metadata = null"));
+        assert!(script.contains("session.playbackState = 'none'"));
+        assert!(
+            script.contains("['metadata', null], ['playbackState', 'none']"),
+            "later writes must be shadowed, not just cleared once"
+        );
+        // The clear has to happen through the real accessors, before they are
+        // replaced, or an entry set by the page would survive.
+        let clear = script
+            .find("session.metadata = null")
+            .expect("observer must clear existing metadata");
+        let shadow = script
+            .find("['metadata', null], ['playbackState', 'none']")
+            .expect("observer must shadow the accessors");
+        assert!(clear < shadow, "clear must precede the no-op shadow");
     }
 
     #[test]

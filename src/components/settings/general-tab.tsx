@@ -2,8 +2,12 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   BellIcon,
+  FileTextIcon,
+  InfoIcon,
   Loader2Icon,
   LogInIcon,
   RadioIcon,
@@ -19,12 +23,16 @@ import { Group, SettingRow, TabPane } from "@/components/settings/primitives";
 import { usePlaybackStore } from "@/lib/store/playback";
 import { useSettingsStore } from "@/lib/store/settings";
 import { startLogin } from "@/lib/login";
+import { checkForUpdates } from "@/lib/updater";
+import { APP_NAME } from "@/lib/branding";
+import { formatDiagnostics } from "@/lib/playback-diagnostics";
 
 export function GeneralTab() {
   return (
     <TabPane tightTop>
       <AccountGroup />
       <BehaviorGroup />
+      <AboutGroup />
     </TabPane>
   );
 }
@@ -190,6 +198,96 @@ function BehaviorGroup() {
             onCheckedChange={setAutoRadio}
             aria-label="Autoplay radio"
           />
+        }
+      />
+    </Group>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* About                                                               */
+/* ------------------------------------------------------------------ */
+
+function AboutGroup() {
+  // The installed version, read from the Tauri manifest rather than a
+  // bundled constant, so it always matches the build the user is running.
+  const [version, setVersion] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    getVersion()
+      .then((value) => {
+        if (!cancelled) setVersion(value);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const [savingLog, setSavingLog] = useState(false);
+
+  const savePlaybackLog = async () => {
+    setSavingLog(true);
+    try {
+      // Header context is plain, non-identifying environment info. The
+      // userAgent pins the OS/WebView version (e.g. macOS 26), which is exactly
+      // what a platform-specific playback bug needs.
+      const s = usePlaybackStore.getState();
+      const track = s.index >= 0 ? s.queue[s.index] : undefined;
+      const contents = formatDiagnostics({
+        app: `${APP_NAME} ${version || "unknown"}`,
+        userAgent: navigator.userAgent,
+        backend: s.backend,
+        autoRadio: s.autoRadio,
+        repeat: s.repeat,
+        queueIndex: s.index,
+        queueLength: s.queue.length,
+        currentVideoId: track?.videoId ?? "none",
+      });
+      const path = await invoke<string>("save_playback_log", { contents });
+      // Reveal it in the OS file manager so the file is easy to attach/send.
+      await revealItemInDir(path).catch(() => {});
+      toast.success("Playback log saved", { description: path });
+    } catch (e) {
+      toast.error(`Could not save playback log: ${String(e)}`);
+    } finally {
+      setSavingLog(false);
+    }
+  };
+
+  return (
+    <Group>
+      <SettingRow
+        icon={InfoIcon}
+        title="Version"
+        // An unreadable version is not worth an error state here: the row
+        // simply names the app until the manifest answers.
+        description={version ? `${APP_NAME} ${version}` : APP_NAME}
+        control={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void checkForUpdates({ silent: false })}
+          >
+            Check for updates
+          </Button>
+        }
+      />
+      <SettingRow
+        icon={FileTextIcon}
+        title="Playback log"
+        description="Save a text log of recent playback events to share when reporting a bug. Contains video ids and playback state only."
+        control={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void savePlaybackLog()}
+            disabled={savingLog}
+          >
+            {savingLog ? <Loader2Icon className="animate-spin" /> : null}
+            Save log
+          </Button>
         }
       />
     </Group>

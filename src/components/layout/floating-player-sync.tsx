@@ -122,6 +122,10 @@ type PlaybackAction =
   | { type: "clearQueue" }
   | { type: "appendToQueue"; tracks: unknown[] }
   | { type: "setAutoRadio"; on: boolean }
+  | {
+      type: "setRadioStation";
+      station: { seed: string; continuation?: string } | undefined;
+    }
   | { type: "playNow"; track: unknown; extras?: unknown }
   | { type: "playShelfItems"; items: unknown[]; startIndex: number }
   | { type: "enqueueNext"; track: unknown }
@@ -245,6 +249,9 @@ export function FloatingPlayerSync() {
             break;
           case "setAutoRadio":
             store.setAutoRadio(a.on);
+            break;
+          case "setRadioStation":
+            store.setRadioStation(a.station);
             break;
           // Serialized ShelfItem/QueueTrack objects; the store methods
           // accept both shapes and pull only the fields they need.

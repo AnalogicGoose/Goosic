@@ -153,6 +153,121 @@ export function clampGlassBlur(value: number): number {
  * of `applyVisualTheme` so switching theme never resets the user's chosen
  * blur. Mounted in both the main and floating windows.
  */
+/**
+ * macOS native-material stops, ordered lightest to heaviest.
+ *
+ * WebKit exposes Apple's materials to CSS through `-apple-visual-effect` (see
+ * the `@supports` tiers in index.css). Both families are real system materials,
+ * so the blur slider stops being a CSS radius there and becomes a picker across
+ * these stops instead — the user's "how frosted is this" model survives, it just
+ * quantizes to what the OS actually offers. Verified against WebKit with
+ * `CSS.supports`; note the regular stop is the bare name in both families, as
+ * the explicit `-regular` spelling is not a valid value.
+ */
+/**
+ * Every material WebKit accepts for `-apple-visual-effect`, verified against
+ * the running engine with `CSS.supports`. Two families:
+ *
+ *  - Liquid Glass (macOS 26+): refracting, dynamic, follows the OS.
+ *  - Classic: the long-standing HIG blur materials, available much further
+ *    back, and still the right pick when a surface wants to sit quieter.
+ *
+ * Note the regular stop is the *bare* value in both families — the explicit
+ * `-regular` spelling is not valid CSS and probes as unsupported.
+ */
+export const GLASS_MATERIALS = [
+  {
+    id: "glass-clear",
+    group: "Liquid Glass",
+    label: "Clear",
+    description: "Lightest glass. Most of the backdrop stays visible.",
+  },
+  {
+    id: "glass-regular",
+    group: "Liquid Glass",
+    label: "Regular",
+    description: "Apple's default Liquid Glass.",
+  },
+  {
+    id: "glass-subdued",
+    group: "Liquid Glass",
+    label: "Subdued",
+    description: "Heaviest glass. Mutes the backdrop the most.",
+  },
+  {
+    id: "blur-ultra-thin",
+    group: "Classic",
+    label: "Ultra thin",
+    description: "Barely there. The classic lightest material.",
+  },
+  {
+    id: "blur-thin",
+    group: "Classic",
+    label: "Thin",
+    description: "Light frost, backdrop still legible.",
+  },
+  {
+    id: "blur-regular",
+    group: "Classic",
+    label: "Regular",
+    description: "The standard frosted material.",
+  },
+  {
+    id: "blur-thick",
+    group: "Classic",
+    label: "Thick",
+    description: "Heavy frost. Backdrop reads as colour only.",
+  },
+  {
+    id: "blur-chrome",
+    group: "Classic",
+    label: "Chrome",
+    description: "Densest. Built for toolbars and title bars.",
+  },
+] as const;
+
+export type GlassMaterialId = (typeof GLASS_MATERIALS)[number]["id"];
+export const GLASS_MATERIAL_DEFAULT: GlassMaterialId = "glass-regular";
+
+/** Distinct group names, in declaration order, for rendering menu sections. */
+export const GLASS_MATERIAL_GROUPS = [
+  ...new Set(GLASS_MATERIALS.map((item) => item.group)),
+];
+
+/**
+ * Carry a pre-family setting forward. The first cut of this control stored the
+ * Liquid Glass stop alone (`clear` / `regular` / `subdued`); those now live
+ * under the glass family.
+ */
+export function migrateGlassMaterialId(value: unknown): GlassMaterialId | null {
+  if (isGlassMaterialId(value)) return value;
+  if (value === "clear" || value === "regular" || value === "subdued") {
+    return `glass-${value}` as GlassMaterialId;
+  }
+  return null;
+}
+
+export function isGlassMaterialId(value: unknown): value is GlassMaterialId {
+  return GLASS_MATERIALS.some((item) => item.id === value);
+}
+
+/** Descriptor for a material id, falling back to the default if unknown. */
+export function getGlassMaterial(
+  id: GlassMaterialId,
+): (typeof GLASS_MATERIALS)[number] {
+  return (
+    GLASS_MATERIALS.find((item) => item.id === id) ??
+    GLASS_MATERIALS.find((item) => item.id === GLASS_MATERIAL_DEFAULT)!
+  );
+}
+
+
+/**
+ * Drive the shared `--glass-blur` radius every glass surface reads. Kept out
+ * of `applyVisualTheme` so switching theme never resets the user's chosen
+ * blur. Mounted in both the main and floating windows.
+ *
+ */
 export function useGlassBlur(blurPx: number): void {
   useEffect(() => {
     const blur = clampGlassBlur(blurPx);
@@ -162,4 +277,24 @@ export function useGlassBlur(blurPx: number): void {
       `${Math.round(blur * (6 / 16) * 100) / 100}px`,
     );
   }, [blurPx]);
+}
+
+/**
+ * Publish the chosen macOS material. Both family attributes are written
+ * unconditionally; the stylesheet's `@supports` tiers decide which one (if
+ * either) applies, so this never has to know the macOS version. A platform
+ * without either simply ignores both attributes and keeps the CSS blur.
+ */
+export function useGlassMaterial(material: GlassMaterialId): void {
+  useEffect(() => {
+    document.documentElement.dataset.glassMaterial = material;
+  }, [material]);
+}
+
+/** True when WebKit will honour Apple's Liquid Glass material in this page. */
+export function supportsNativeLiquidGlass(): boolean {
+  return (
+    typeof CSS !== "undefined" &&
+    CSS.supports("-apple-visual-effect", "-apple-system-glass-material")
+  );
 }

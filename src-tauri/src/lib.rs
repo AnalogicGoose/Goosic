@@ -1400,6 +1400,10 @@ async fn open_player_window(
         .map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     native_glass::install(&win)?;
+    #[cfg(target_os = "macos")]
+    if let Err(e) = native_glass::enable_system_appearance(&win) {
+        eprintln!("[glass] {e}");
+    }
     // Dev builds: orange taskbar icon, same as the main window.
     #[cfg(debug_assertions)]
     let _ = win.set_icon(runtime_icon(&app));
@@ -1802,7 +1806,7 @@ async fn set_account_channel(
         (Some(port), Some(token)) => (port, token),
         _ => return Err("playback bridge is not ready".into()),
     };
-    let bridge_url = format!("http://127.0.0.1:{port}/{token}/web-player/identity");
+    let bridge_url = web_player::bridge_endpoint(port, &token, "identity");
     let _session = session.mutation.lock().await;
     let mut idx = read_index(&app).await;
     if idx.active.as_deref() != Some(id.as_str()) {
@@ -2925,7 +2929,7 @@ async fn web_player_load(
     // A restored queue can reach this command during that short cold-start
     // window, so await readiness instead of consuming both frontend retries.
     let (port, web_player_token) = wait_for_web_player_bridge(server.inner()).await?;
-    let bridge_url = format!("http://127.0.0.1:{port}/{web_player_token}/web-player/state");
+    let bridge_url = web_player::bridge_endpoint(port, &web_player_token, "state");
     // Hold the account identity stable through profile selection and player
     // creation. A concurrent account/channel switch will wait, then reset this
     // owner before committing its new index snapshot.
@@ -3003,6 +3007,29 @@ async fn web_player_health(
     player: tauri::State<'_, web_player::WebPlayerState>,
 ) -> Result<bool, String> {
     Ok(web_player::healthy(&app, player.inner()).await)
+}
+
+/// Persist the in-memory playback diagnostics buffer to a plain-text file the
+/// user can open and share when reporting a playback bug. Returns the absolute
+/// path so the UI can reveal it. The contents are produced by the frontend
+/// (src/lib/playback-diagnostics.ts) and are already privacy-scrubbed: video
+/// ids and playback flags only, never cookies, bridge secrets, or URLs.
+#[tauri::command]
+async fn save_playback_log(app: tauri::AppHandle, contents: String) -> Result<String, String> {
+    // A runaway buffer must never write an enormous file.
+    let bounded: String = contents.chars().take(1_000_000).collect();
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data directory: {e}"))?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| format!("could not create app data directory: {e}"))?;
+    let path = dir.join("goosic-playback-log.txt");
+    tokio::fs::write(&path, bounded.as_bytes())
+        .await
+        .map_err(|e| format!("could not write log: {e}"))?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 const OFFLINE_DOWNLOAD_COOLDOWN_KEY: &str = "offlineDownloadCooldownUntil";
@@ -4127,7 +4154,7 @@ pub fn run() {
     let web_player_state = web_player::WebPlayerState::default();
     let web_player_server_state = web_player_state.clone();
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main_window(app);
         }))
@@ -4168,7 +4195,36 @@ pub fn run() {
         .manage(AccountSessionGuard::default())
         .manage(RefreshGuard::default())
         .manage(discord::spawn())
-        .manage(lastfm::LastfmState::default())
+        .manage(lastfm::LastfmState::default());
+
+    // WebKitGTK blocks an `http://127.0.0.1` subresource of the official
+    // HTTPS page as mixed content, so on Linux the observer carries the same
+    // envelope over the app-owned `goosicbridge` scheme instead (WebKitGTK
+    // marks the registered scheme secure). macOS/WKWebView blocks BOTH the
+    // loopback route (private-network policy) AND the custom scheme (CSP
+    // `connect-src` refuses the fetch before wry's handler ever sees it —
+    // confirmed 2026-07-22: playback runs, zero scheme requests arrive), so
+    // macOS reports through a WKScriptMessageHandler instead (see
+    // web_player::install_message_bridge). Windows keeps loopback HTTP.
+    #[cfg(target_os = "linux")]
+    let builder = builder.register_asynchronous_uri_scheme_protocol(
+        web_player::BRIDGE_SCHEME,
+        |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let label = ctx.webview_label().to_string();
+            tauri::async_runtime::spawn(async move {
+                let token_handle = app.state::<StreamServerState>().web_player_token.clone();
+                let player_state = app.state::<web_player::WebPlayerState>().inner().clone();
+                let token = token_handle.lock().await.clone().unwrap_or_default();
+                responder.respond(
+                    web_player::serve_bridge_scheme(&app, &player_state, &label, &token, request)
+                        .await,
+                );
+            });
+        },
+    );
+
+    let app = builder
         .invoke_handler(tauri::generate_handler![
             ensure_ytdlp,
             get_stream_base_url,
@@ -4179,6 +4235,7 @@ pub fn run() {
             web_player_control,
             web_player_reset,
             web_player_health,
+            save_playback_log,
             start_login,
             get_cookie_header,
             get_auth_context,
@@ -4334,6 +4391,15 @@ pub fn run() {
             // main thread, which souvlaki requires and where the main window's
             // HWND is available.
             media::init(app.handle());
+            // Let the page use the real system material via `-apple-visual-effect`
+            // (see the `@supports` block in src/index.css). No-op on a system that
+            // does not expose the preference; the CSS falls back on its own.
+            #[cfg(target_os = "macos")]
+            if let Some(w) = app.get_webview_window("main") {
+                if let Err(e) = native_glass::enable_system_appearance(&w) {
+                    eprintln!("[glass] {e}");
+                }
+            }
             if let Err(e) = build_tray(app.handle()) {
                 eprintln!("[tray] build failed: {e}");
             }

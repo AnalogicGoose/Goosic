@@ -1,5 +1,5 @@
 import { create, type StateCreator } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 import { emit } from "@tauri-apps/api/event";
 import type { ShelfItem, Thumbnail } from "@/lib/innertube/types";
 import { isFloatingPlayerWindow } from "@/lib/floating-player";
@@ -69,6 +69,14 @@ export type PlaybackState = {
 
   /** When true, auto-append radio tracks to the queue when the last one ends. */
   autoRadio: boolean;
+  /**
+   * The active radio station: the seed it was started on and the token for
+   * its next page. "Start radio" sets this so the auto-extend logic pages the
+   * same station from the very first extension instead of re-seeding on the
+   * last pre-filled track (which drifts off-genre). Not persisted — station
+   * tokens are short-lived, so a fresh launch re-seeds cleanly.
+   */
+  radioStation?: { seed: string; continuation?: string };
 
   // Actions — queue
   playNow: (track: QueueTrack | ShelfItem, extras?: QueueTrack[]) => void;
@@ -84,6 +92,9 @@ export type PlaybackState = {
   moveTrack: (from: number, to: number) => void;
   clearQueue: (force?: boolean) => void;
   setAutoRadio: (on: boolean) => void;
+  setRadioStation: (
+    station: { seed: string; continuation?: string } | undefined,
+  ) => void;
 
   // Actions — transport
   toggle: () => void;
@@ -109,8 +120,55 @@ export type PlaybackState = {
   cycleRepeat: () => void;
 };
 
+function normalizeQueueTrack(track: QueueTrack): QueueTrack {
+  return {
+    ...track,
+    thumbnails: Array.isArray(track.thumbnails) ? track.thumbnails : [],
+  };
+}
+
+/**
+ * A track's full `thumbnails` array (5+ objects, each a long
+ * googleusercontent URL) is by far the heaviest thing in a queue entry. A
+ * long radio/autoplay queue of them pushed `ytm-playback` past the ~5MB
+ * localStorage quota, and the resulting `setItem` throw crashed the whole app
+ * into the error boundary ("Setting the value of 'ytm-playback' exceeded the
+ * quota"). Persist only the single highest-resolution thumbnail: it renders
+ * the queue and cover on rehydrate, and the runtime cover-art logic
+ * re-derives hi-res art anyway.
+ */
+function slimThumbnailsForPersist(thumbnails: Thumbnail[]): Thumbnail[] {
+  if (!Array.isArray(thumbnails) || thumbnails.length === 0) return [];
+  let best = thumbnails[0];
+  for (const candidate of thumbnails) {
+    if ((candidate.width ?? 0) > (best.width ?? 0)) best = candidate;
+  }
+  return [best];
+}
+
+/**
+ * localStorage wrapper that never lets a write crash the app. A quota
+ * overflow (an unusually large queue even after thumbnail trimming) is
+ * swallowed with a warning, leaving the previous good value in place — the
+ * in-memory queue keeps working; only this one cross-launch snapshot is
+ * skipped. Reads and removes pass straight through.
+ */
+const quotaSafePlaybackStorage = createJSONStorage(() => ({
+  getItem: (name) => localStorage.getItem(name),
+  setItem: (name, value) => {
+    try {
+      localStorage.setItem(name, value);
+    } catch (error) {
+      console.warn("[playback] queue snapshot not persisted:", error);
+    }
+  },
+  removeItem: (name) => localStorage.removeItem(name),
+}));
+
 function shelfItemToTrack(item: ShelfItem | QueueTrack): QueueTrack | null {
-  if ("videoId" in item) return item;
+  if ("videoId" in item) {
+    return normalizeQueueTrack(item);
+  }
   if (item.kind !== "song" && item.kind !== "video") return null;
   return {
     videoId: item.id,
@@ -119,7 +177,7 @@ function shelfItemToTrack(item: ShelfItem | QueueTrack): QueueTrack | null {
     artists: item.artists,
     album: item.album,
     albumId: item.albumId,
-    thumbnails: item.thumbnails,
+    thumbnails: Array.isArray(item.thumbnails) ? item.thumbnails : [],
     duration: item.duration,
   };
 }
@@ -139,6 +197,7 @@ const playbackStateCreator: StateCreator<PlaybackState> = (set, get) => ({
   shuffle: false,
   repeat: "off",
   autoRadio: false,
+  radioStation: undefined,
 
   status: "idle",
   error: undefined,
@@ -210,6 +269,8 @@ const playbackStateCreator: StateCreator<PlaybackState> = (set, get) => ({
       playing: true,
       error: undefined,
       loadRevision: get().loadRevision + 1,
+      // A brand-new context supersedes any active radio station.
+      radioStation: undefined,
     });
   },
 
@@ -219,7 +280,10 @@ const playbackStateCreator: StateCreator<PlaybackState> = (set, get) => ({
     const i = Math.max(0, Math.min(startIndex, tracks.length - 1));
     // Honour an active shuffle: keep the chosen track current and shuffle
     // the upcoming portion, matching setShuffle's semantics.
-    let queue = tracks.map((t) => ({ ...t, source: t.source ?? "user" }));
+    let queue = tracks.map((track) => ({
+      ...normalizeQueueTrack(track),
+      source: track.source ?? "user",
+    }));
     if (get().shuffle) {
       queue = [...queue.slice(0, i + 1), ...fisherYates(queue.slice(i + 1))];
     }
@@ -233,6 +297,9 @@ const playbackStateCreator: StateCreator<PlaybackState> = (set, get) => ({
       playing: true,
       error: undefined,
       loadRevision: get().loadRevision + 1,
+      // A brand-new context supersedes any active radio station. "Start radio"
+      // calls setRadioStation *after* this, so its station survives.
+      radioStation: undefined,
     });
   },
 
@@ -368,6 +435,7 @@ const playbackStateCreator: StateCreator<PlaybackState> = (set, get) => ({
   },
 
   setAutoRadio: (on) => set({ autoRadio: on }),
+  setRadioStation: (radioStation) => set({ radioStation }),
 
   toggle: () => {
     const { queue, playing, status } = get();
@@ -563,13 +631,28 @@ export const usePlaybackStore = isFloatingPlayerWindow()
   : create<PlaybackState>()(
       persist(playbackStateCreator, {
         name: "ytm-playback",
-        version: 1,
+        version: 2,
+        storage: quotaSafePlaybackStorage,
+        migrate: (persisted) => {
+          const state = persisted as Partial<PlaybackState>;
+          const queue = Array.isArray(state.queue)
+            ? state.queue.map(normalizeQueueTrack)
+            : [];
+          const index =
+            queue.length === 0
+              ? -1
+              : Math.max(0, Math.min(state.index ?? 0, queue.length - 1));
+          return { ...state, queue, index } as PlaybackState;
+        },
         // Only the user-facing settings + the queue itself are saved.
         // Volatile fields (position, status, streamUrl, error,
         // pendingSeek) and `playing` are reset on rehydrate so a fresh
         // launch never auto-blasts audio at you.
         partialize: (s) => ({
-          queue: s.queue,
+          queue: s.queue.map((track) => ({
+            ...track,
+            thumbnails: slimThumbnailsForPersist(track.thumbnails),
+          })),
           index: s.index,
           shuffle: s.shuffle,
           repeat: s.repeat,
@@ -661,6 +744,8 @@ export function initFloatingPlaybackBridge(): void {
     appendToQueue: (tracks) =>
       sendAction({ type: "appendToQueue", tracks: tracks as unknown[] }),
     setAutoRadio: (on) => sendAction({ type: "setAutoRadio", on }),
+    setRadioStation: (station) =>
+      sendAction({ type: "setRadioStation", station: station as unknown }),
     // Queue-building actions reachable from the floater's ⋮ menu (Play,
     // Play next, Add to queue, Start radio). Without these overrides they
     // mutated only the floater's mirror store — nothing actually played and
