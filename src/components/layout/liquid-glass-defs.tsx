@@ -1,21 +1,13 @@
 import { useEffect, useRef } from "react";
-import {
-  getGlassResolutionBudget,
-  MAX_MAP_TEXELS,
-  MIN_BEZEL_TEXELS,
-  sourceBandLimitSigma,
-  type GlassResolutionBudget,
-} from "@/lib/glass-quality";
 import { isWindowsWebview } from "@/lib/platform";
 import { useSettingsStore } from "@/lib/store/settings";
-import { clampGlassBlur } from "@/lib/themes";
+import { webGlassMaterialTokens } from "@/lib/themes";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 // Only the explicit Active=True material gets the WebView2 lens. Static
 // glass is a separate Shadow -> Fill construction and never registers here.
 const GLASS_SELECTOR = ".glass-material-interactive";
 const LIQUID_GLASS_SURFACE_EVENT = "goosic:register-liquid-glass-surface";
-const PROFILE_SAMPLES = 255;
 
 // Figma Glass preset supplied by the product owner. Keep this as the single
 // optics source of truth for players, menus, popovers, and dialogs.
@@ -27,38 +19,6 @@ export const FIGMA_GLASS_PRESET = {
 } as const;
 
 const SMALL_GLASS_FROST_RATIO = 6 / 16;
-
-/** Refractive index at full strength. Optical glass sits around 1.5. */
-const GLASS_INDEX_RANGE = 0.72;
-/**
- * Glass depth at full strength, as a multiple of the bezel width. The bevel
- * fillet occupies the top `1.0` of it; anything above that is the straight
- * sidewall, which deepens the bend without moving where it peaks.
- */
-const GLASS_THICKNESS_RANGE = 0.25;
-/**
- * Floor on d(source)/d(destination) across the bezel.
- *
- * The traced displacement wants to compress the backdrop harder than one
- * destination pixel per source pixel near the rim. Left alone that inverts the
- * sampled image — the derivative of `position + displacement` goes negative and
- * the bezel shows a mirrored sweep of the panel interior instead of a
- * compressed one. A real lens resolves that as a caustic; a single-sample
- * displacement map cannot, so the profile is limited to a 5:1 squeeze instead.
- */
-const MIN_SAMPLE_SLOPE = 0.2;
-/** Sub-samples per profile bin, so the near-vertical rim is area-averaged. */
-const RIM_SUPERSAMPLES = 4;
-
-type RefractionProfile = {
-  /**
-   * Displacement at each sample from the outer edge (index 0) to the inner end
-   * of the bezel, as a fraction of `maximumDisplacement`.
-   */
-  normalized: Float32Array;
-  /** Peak displacement, in bezel widths. Multiply by the bezel's CSS size. */
-  maximumDisplacement: number;
-};
 
 type SurfaceRegistration = {
   frame: number | null;
@@ -73,6 +33,10 @@ type MaterialMaps = {
 };
 
 const mapCache = new Map<string, MaterialMaps>();
+// feImage stretches the vector field to the panel's exact dimensions, so
+// Full-window rasters only waste memory. Bound map resolution and resize
+// history: sixteen worst-case displacement maps total roughly
+// 16 MiB of raw RGBA data before PNG compression.
 const MAX_CACHED_MAPS = 16;
 
 /**
@@ -88,263 +52,95 @@ export function registerLiquidGlassSurface(element: HTMLElement): void {
   );
 }
 
-/** Height of the bevel fillet, 0 at the outer rim to 1 at the flat top. */
-function convexSquircle(x: number): number {
-  const clamped = Math.min(1, Math.max(0, x));
-  return Math.pow(1 - Math.pow(1 - clamped, 4), 0.25);
-}
-
-/** Analytic slope of `convexSquircle`; diverges at the rim, zero at the top. */
-function convexSquircleSlope(x: number): number {
-  const clamped = Math.min(1, Math.max(0, x));
-  const inverse = 1 - clamped;
-  const base = 1 - Math.pow(inverse, 4);
-  if (base <= 0) return Number.POSITIVE_INFINITY;
-  return Math.pow(inverse, 3) / Math.pow(base, 0.75);
-}
-
-/**
- * Unpolarized Fresnel transmittance for an air -> glass interface. At the rim
- * the bevel is close to vertical, the ray hits it at grazing incidence, and
- * almost all of the light reflects rather than refracts. Weighting by
- * transmittance is what rolls the displacement off to nothing at the boundary,
- * instead of the singularity an unweighted trace produces there.
- */
-function fresnelTransmittance(
-  cosIncidence: number,
-  refractiveIndex: number,
-): number {
-  const eta = 1 / refractiveIndex;
-  const k = 1 - eta * eta * (1 - cosIncidence * cosIncidence);
-  if (k <= 0) return 0;
-  const cosRefracted = Math.sqrt(k);
-  const sPolarized =
-    (cosIncidence - refractiveIndex * cosRefracted) /
-    (cosIncidence + refractiveIndex * cosRefracted);
-  const pPolarized =
-    (refractiveIndex * cosIncidence - cosRefracted) /
-    (refractiveIndex * cosIncidence + cosRefracted);
-  return 1 - (sPolarized * sPolarized + pPolarized * pPolarized) / 2;
-}
-
-/**
- * Lateral distance, in bezel widths, that an orthogonal viewing ray travels
- * sideways between entering the bevel at `position` and reaching the backdrop
- * under the glass. Positive means inward: the bezel shows backdrop from
- * further inside the panel, which is what makes the rim read as a lens.
- *
- * The glass depth under the entry point varies with the bevel height, so the
- * shift vanishes at both ends of the band — a constant depth instead puts the
- * entire displacement into the outermost texel, where the surface normal is
- * near-horizontal and the trace diverges.
- */
-function traceBevelRay(
-  position: number,
-  refractiveIndex: number,
-  thicknessRatio: number,
-): number {
-  if (position <= 0) return 0;
-  const depth = thicknessRatio - 1 + convexSquircle(position);
-  const slope = convexSquircleSlope(position);
-  if (!Number.isFinite(slope)) return 0;
-  const length = Math.hypot(slope, 1);
-  // Surface normal of the bevel: up and outward, so the refracted ray tilts
-  // inward and the sampled backdrop is pulled toward the panel centre.
-  const normalX = -slope / length;
-  const normalY = 1 / length;
-  const cosIncidence = normalY;
-  const eta = 1 / refractiveIndex;
-  const k = 1 - eta * eta * (1 - cosIncidence * cosIncidence);
-  if (k <= 0) return 0;
-  const coefficient = eta * cosIncidence - Math.sqrt(k);
-  const rayX = coefficient * normalX;
-  const rayY = coefficient * normalY - eta;
-  if (rayY >= 0) return 0;
-  const lateral = depth * (rayX / -rayY);
-  return lateral * fresnelTransmittance(cosIncidence, refractiveIndex);
-}
-
-/**
- * Trace one radial slice of the bevel into a displacement profile for the
- * 8-bit SVG map: sample positions from the outer rim inward, area-average the
- * rim where the trace changes fastest, then limit the result so the sampled
- * backdrop compresses without folding over on itself.
- */
-export function createConvexRefractionProfile(
-  refraction: number = FIGMA_GLASS_PRESET.refraction,
-): RefractionProfile {
-  const strength = Math.min(100, Math.max(0, refraction)) / 100;
-  const refractiveIndex = 1 + strength * GLASS_INDEX_RANGE;
-  const thicknessRatio = 1 + strength * GLASS_THICKNESS_RANGE;
-  const step = 1 / PROFILE_SAMPLES;
-
-  const traced = new Float64Array(PROFILE_SAMPLES + 1);
-  for (let i = 0; i <= PROFILE_SAMPLES; i += 1) {
-    let total = 0;
-    for (let sub = 0; sub < RIM_SUPERSAMPLES; sub += 1) {
-      const offset = (sub + 0.5) / RIM_SUPERSAMPLES - 0.5;
-      const position = Math.min(1, Math.max(0, (i + offset) * step));
-      total += traceBevelRay(position, refractiveIndex, thicknessRatio);
-    }
-    traced[i] = Math.max(0, total / RIM_SUPERSAMPLES);
-  }
-
-  // `source[i]` is the bezel position that destination sample `i` reads from.
-  // Sweeping inward-to-outward with a floor on the step keeps that mapping
-  // strictly increasing, so the refracted image can never reverse direction.
-  const source = new Float64Array(PROFILE_SAMPLES + 1);
-  source[PROFILE_SAMPLES] = 1;
-  for (let i = PROFILE_SAMPLES - 1; i >= 0; i -= 1) {
-    const destination = i * step;
-    source[i] = Math.max(
-      destination,
-      Math.min(
-        destination + traced[i],
-        source[i + 1] - MIN_SAMPLE_SLOPE * step,
-      ),
-    );
-  }
-
-  const normalized = new Float32Array(PROFILE_SAMPLES + 1);
-  let maximumDisplacement = 0;
-  for (let i = 0; i <= PROFILE_SAMPLES; i += 1) {
-    const displacement = source[i] - i * step;
-    normalized[i] = displacement;
-    maximumDisplacement = Math.max(maximumDisplacement, displacement);
-  }
-  if (maximumDisplacement > 0) {
-    for (let i = 0; i <= PROFILE_SAMPLES; i += 1) {
-      normalized[i] /= maximumDisplacement;
-    }
-  }
-  return { normalized, maximumDisplacement };
-}
-
-type SurfaceSample = {
-  /** Signed distance to the rounded-rect boundary; negative inside. */
-  distance: number;
-  /** Unit outward normal of the boundary at this point. */
-  normalX: number;
-  normalY: number;
-};
-
-/**
- * Signed distance and exact outward normal of a rounded rectangle.
- *
- * The normal is analytic rather than a finite difference of the distance
- * field: inside the corner fillet it is radial, along the straight runs it is
- * axis-aligned, and it stays exact right up to the boundary. A central
- * difference blurs the two regimes into each other across its sample width,
- * which is what bent the displacement the wrong way in the corners.
- */
 function roundedRectSdf(
   x: number,
   y: number,
   width: number,
   height: number,
   radius: number,
-): SurfaceSample {
-  const halfWidth = width / 2;
-  const halfHeight = height / 2;
-  const offsetX = x - halfWidth;
-  const offsetY = y - halfHeight;
-  const signX = offsetX < 0 ? -1 : 1;
-  const signY = offsetY < 0 ? -1 : 1;
-  const qx = Math.abs(offsetX) - (halfWidth - radius);
-  const qy = Math.abs(offsetY) - (halfHeight - radius);
-  const outside = Math.hypot(Math.max(qx, 0), Math.max(qy, 0));
-  const distance = outside + Math.min(Math.max(qx, qy), 0) - radius;
-
-  if (qx > 0 && qy > 0) {
-    const length = outside || 1;
-    return {
-      distance,
-      normalX: (signX * qx) / length,
-      normalY: (signY * qy) / length,
-    };
-  }
-  if (qx > qy) return { distance, normalX: signX, normalY: 0 };
-  return { distance, normalX: 0, normalY: signY };
-}
-
-function sampleProfile(profile: Float32Array, x: number): number {
-  const position = Math.min(1, Math.max(0, x)) * PROFILE_SAMPLES;
-  const lower = Math.floor(position);
-  const upper = Math.min(PROFILE_SAMPLES, lower + 1);
-  const mix = position - lower;
-  return profile[lower] * (1 - mix) + profile[upper] * mix;
-}
-
-/**
- * Box-average the profile over one texel's worth of the bezel. The traced
- * displacement climbs from nothing to its peak within the first texel or two,
- * so point-sampling it lands somewhere arbitrary on that ramp and leaves a
- * one-texel ring that neither feImage's interpolation nor the frost can hide.
- */
-function sampleProfileFiltered(
-  profile: Float32Array,
-  x: number,
-  texelWidth: number,
 ): number {
-  const offset = texelWidth / 3;
+  const qx = Math.abs(x - width / 2) - (width / 2 - radius);
+  const qy = Math.abs(y - height / 2) - (height / 2 - radius);
   return (
-    (sampleProfile(profile, x - offset) +
-      sampleProfile(profile, x) +
-      sampleProfile(profile, x + offset)) /
-    3
+    Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) +
+    Math.min(Math.max(qx, qy), 0) -
+    radius
   );
 }
 
 /**
- * Texels per CSS pixel for one surface's displacement field.
+ * Fraction of the panel's short side occupied by the lens band.
  *
- * Resolution is driven by the bezel, not by the panel: the field is flat
- * everywhere except the band the bezel occupies, so a wide player bar needs no
- * more texels across its length than a menu does, but it needs just as many
- * across its 30px edge. The bezel floor therefore outranks the texel budget —
- * this is the resolution the user asked never to be traded for performance.
+ * The reference shader normalizes its SDF by `min(width, height)` and remaps
+ * the inner 30% of that, so the band is *proportional* to the surface rather
+ * than a fixed pixel depth. A constant band is what made a wide player bar and
+ * a small menu look like different materials.
  */
-export function displacementRasterScale(
-  width: number,
-  height: number,
-  bezelWidth: number,
-  requested: number,
-): number {
-  const budgeted = Math.sqrt(MAX_MAP_TEXELS / Math.max(1, width * height));
-  const bezelFloor = MIN_BEZEL_TEXELS / Math.max(1, bezelWidth);
-  return Math.min(
-    requested,
-    Math.max(Math.min(requested, budgeted), bezelFloor),
-  );
+const LENS_BAND = 0.3;
+
+/**
+ * Ceiling on the lens band, in CSS pixels. Without it a tall dialog gets a band
+ * most of its height deep and never shows a flat middle; macOS keeps large
+ * surfaces mostly flat with the optics confined to the rim.
+ */
+const MAX_LENS_BAND_PX = 34;
+
+/**
+ * Displacement texels per CSS pixel, and the ceiling on one map.
+ *
+ * The old uniform `min(1, 512/w, 512/h)` cap was the source of the visible
+ * blocking: a 1200px-wide panel was described by a 512px-wide field, and
+ * feImage stretched each texel back out to more than two CSS pixels. Resolution
+ * now follows the display, and only a total-texel budget bounds it — a bound
+ * large panels reach far later than a hard 512 did.
+ */
+const MAX_MAP_TEXELS = 1_400_000;
+
+function displacementRasterScale(width: number, height: number): number {
+  const ratio =
+    typeof window === "undefined" ? 1 : (window.devicePixelRatio ?? 1);
+  const density = Number.isFinite(ratio) ? Math.min(2, Math.max(1, ratio)) : 1;
+  const budget = Math.sqrt(MAX_MAP_TEXELS / Math.max(1, width * height));
+  return Math.max(0.5, Math.min(density, budget));
+}
+
+/**
+ * Lens strength at a point, from its inset into the panel.
+ *
+ * `inset` is the SDF depth normalized by the panel's short side, so the band is
+ * proportional to the surface. Returns 0 through the flat interior and rises to
+ * 1 at the rim along a circular profile (`1 - sqrt(1 - d^2)`) — the same curve
+ * used to describe a lens surface in optics, flat through the middle and
+ * turning over sharply at the edge.
+ */
+export function lensDisplacementFactor(inset: number): number {
+  const edgeness = 1 - Math.min(1, Math.max(0, inset / LENS_BAND));
+  if (edgeness <= 0) return 0;
+  return 1 - Math.sqrt(Math.max(0, 1 - edgeness * edgeness));
 }
 
 function createMaps(
   width: number,
   height: number,
   radius: number,
-  budget: GlassResolutionBudget,
 ): MaterialMaps {
-  // The bezel is a fixed CSS-pixel band, narrowed only when the panel is too
-  // small to contain it. Its width in CSS pixels sets the physical scale of
-  // the whole optic, so it is resolved before any rasterization decision.
-  const bezelWidth = Math.max(
-    1,
-    Math.min(FIGMA_GLASS_PRESET.depth, Math.min(width, height) / 2 - 1),
-  );
-  // feImage stretches this raster back to the panel's exact CSS size; a
-  // uniform scale keeps the corner fillets circular while it does so.
-  const rasterScale = displacementRasterScale(
-    width,
-    height,
-    bezelWidth,
-    budget.displacementScale,
-  );
+  // feImage scales this raster back to the exact CSS-pixel size. The radius is
+  // scaled with it so the corner fillets stay circular while it does so.
+  const rasterScale = displacementRasterScale(width, height);
   const rasterWidth = Math.max(2, Math.round(width * rasterScale));
   const rasterHeight = Math.max(2, Math.round(height * rasterScale));
   const rasterRadius = Math.max(1, radius * rasterScale);
-  const rasterBezel = Math.max(1, bezelWidth * rasterScale);
-  const texelWidth = 1 / rasterBezel;
-  const profile = createConvexRefractionProfile();
+  const halfWidth = rasterWidth / 2;
+  const halfHeight = rasterHeight / 2;
+  const shortSide = Math.min(rasterWidth, rasterHeight);
+  // The lens band, in raster texels. Proportional to the surface so a chip and
+  // a dialog read as the same material, but capped in absolute terms: past a
+  // point a bigger panel means more flat glass in the middle, not a wider
+  // bezel, which is what keeps a large surface's interior readable.
+  const bandWidth = Math.max(
+    2,
+    Math.min(LENS_BAND * shortSide, MAX_LENS_BAND_PX * rasterScale),
+  );
 
   const displacementCanvas = document.createElement("canvas");
   displacementCanvas.width = rasterWidth;
@@ -357,36 +153,101 @@ function createMaps(
     rasterWidth,
     rasterHeight,
   );
+  // Two passes: trace the vector field in floating point, then quantize it.
+  // Quantizing per texel against a guessed peak is what produced visible steps
+  // — the peak has to be known before anything is written to 8 bits.
+  const fieldX = new Float32Array(rasterWidth * rasterHeight);
+  const fieldY = new Float32Array(rasterWidth * rasterHeight);
+  let peak = 0;
 
   for (let y = 0; y < rasterHeight; y += 1) {
     for (let x = 0; x < rasterWidth; x += 1) {
-      const offset = (y * rasterWidth + x) * 4;
-      const surface = roundedRectSdf(
-        x + 0.5,
-        y + 0.5,
-        rasterWidth,
-        rasterHeight,
-        rasterRadius,
-      );
-      const distanceFromEdge = -surface.distance;
-      let red = 128;
-      let green = 128;
+      const index = y * rasterWidth + x;
+      let sumX = 0;
+      let sumY = 0;
 
-      if (distanceFromEdge >= 0 && distanceFromEdge < rasterBezel) {
-        const magnitude = sampleProfileFiltered(
-          profile.normalized,
-          distanceFromEdge / rasterBezel,
-          texelWidth,
+      // Supersample the field inside each texel. The profile turns over fastest
+      // exactly at the rim, so one sample per texel aliases the steepest part
+      // of the optic — the frost cannot recover detail the field never had, and
+      // the result is the stair-stepped edge. Averaging a 2x2 grid antialiases
+      // the vector field itself, before it is ever quantized.
+      for (let sub = 0; sub < 4; sub += 1) {
+        const sampleX = x + (sub % 2 === 0 ? 0.25 : 0.75);
+        const sampleY = y + (sub < 2 ? 0.25 : 0.75);
+        const distance = roundedRectSdf(
+          sampleX,
+          sampleY,
+          rasterWidth,
+          rasterHeight,
+          rasterRadius,
         );
-        // feDisplacementMap reads the channel as `value/255 - 0.5`, so the
-        // neutral point sits half a level above 127.5. Encoding around 127.5
-        // and rounding keeps the flat interior at a true zero offset.
-        red = Math.round(127.5 - surface.normalX * magnitude * 127.5);
-        green = Math.round(127.5 - surface.normalY * magnitude * 127.5);
+        if (distance >= 0) continue;
+
+        // Inset expressed in bands: 0 at the rim, 1 at the inner edge of the
+        // lens. Everything deeper is flat interior.
+        const inset = (-distance / bandWidth) * LENS_BAND;
+        const lens = lensDisplacementFactor(inset);
+        if (lens <= 0) continue;
+
+        // Direction: radial, but in *aspect-normalized* space. A plain radial
+        // field from the centre is what the reference shader uses, and it is
+        // continuous everywhere — unlike the SDF gradient, which is
+        // axis-aligned along the straight runs and radial only inside the
+        // corner fillets, so it breaks visibly at those four seams. But on a
+        // wide surface a plain radial direction points sideways near the ends,
+        // where the nearest edge is above or below; dividing by the
+        // half-extents first makes the field elliptical, so it stays
+        // perpendicular to whichever edge is actually close. On a square
+        // surface the two are identical.
+        const aspectX = (sampleX - halfWidth) / halfWidth;
+        const aspectY = (sampleY - halfHeight) / halfHeight;
+        const length = Math.hypot(aspectX, aspectY) || 1;
+        // Magnitude scales with the band, not with the panel. The reference
+        // shader multiplies by `glassSize * 0.5`, which is fine for the 120x80
+        // panel it demonstrates on but means up to 360px of shift on a 720px
+        // player bar — the bezel folds through the middle and the bar pinches
+        // into a bowtie. The band is the glass's physical thickness, and that
+        // is what sets how far it can bend light.
+        //
+        // Negative: the rim samples from *inside* the panel, compressing the
+        // interior into the bezel, which is what a lens does and what the
+        // reference means by `fragCoord - offset`. Sampling outward instead
+        // pulls in content from beyond the panel that matches nothing next to
+        // it, and the mismatch reads as a hard line where the effect starts.
+        sumX -= (lens * bandWidth * aspectX) / length;
+        sumY -= (lens * bandWidth * aspectY) / length;
       }
 
-      displacementImage.data[offset] = red;
-      displacementImage.data[offset + 1] = green;
+      const displacementX = sumX / 4;
+      const displacementY = sumY / 4;
+      if (displacementX === 0 && displacementY === 0) continue;
+      fieldX[index] = displacementX;
+      fieldY[index] = displacementY;
+      peak = Math.max(peak, Math.abs(displacementX), Math.abs(displacementY));
+    }
+  }
+
+  // An 8-bit channel gives 127 levels per direction, so a large panel's peak
+  // displacement lands several CSS pixels apart per level. Ordered dithering
+  // spreads that quantization error across neighbouring texels, which the
+  // frost then averages out — without it the field bands into the visible
+  // terraces the flat-contrast backdrop exposes.
+  const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+  const encode = (value: number, x: number, y: number): number => {
+    if (peak <= 0) return 128;
+    const dither = (BAYER[(y & 3) * 4 + (x & 3)] + 0.5) / 16 - 0.5;
+    return Math.min(
+      255,
+      Math.max(0, Math.round(128 + (value / peak) * 127 + dither)),
+    );
+  };
+
+  for (let y = 0; y < rasterHeight; y += 1) {
+    for (let x = 0; x < rasterWidth; x += 1) {
+      const index = y * rasterWidth + x;
+      const offset = index * 4;
+      displacementImage.data[offset] = encode(fieldX[index], x, y);
+      displacementImage.data[offset + 1] = encode(fieldY[index], x, y);
       displacementImage.data[offset + 2] = 128;
       displacementImage.data[offset + 3] = 255;
     }
@@ -395,9 +256,9 @@ function createMaps(
   displacementContext.putImageData(displacementImage, 0, 0);
   const maps = {
     displacement: displacementCanvas.toDataURL("image/png"),
-    // The profile is expressed in bezel widths, so the optic scales with the
-    // CSS-pixel bezel and not with whatever resolution the raster landed on.
-    maximumDisplacement: profile.maximumDisplacement * bezelWidth,
+    // The field is traced in raster texels; feImage stretches it back to the
+    // panel's CSS size, so the peak converts with it.
+    maximumDisplacement: peak / rasterScale,
   };
   // Release the temporary backing store now instead of waiting for renderer
   // GC after every resize or newly opened glass surface.
@@ -411,7 +272,6 @@ function getCachedMaps(
   width: number,
   height: number,
   radius: number,
-  budget: GlassResolutionBudget,
 ): MaterialMaps {
   const cached = mapCache.get(key);
   if (cached) {
@@ -421,7 +281,7 @@ function getCachedMaps(
     return cached;
   }
 
-  const maps = createMaps(width, height, radius, budget);
+  const maps = createMaps(width, height, radius);
   mapCache.set(key, maps);
   while (mapCache.size > MAX_CACHED_MAPS) {
     const oldestKey = mapCache.keys().next().value;
@@ -452,27 +312,15 @@ function appendFilter(
   maps: MaterialMaps,
   blurLevel: number,
   refractionLevel: number,
-  budget: GlassResolutionBudget,
+  saturation: number,
 ): void {
-  const maximumDisplacement = maps.maximumDisplacement * refractionLevel;
-  // Backdrop sampled below full resolution is realised as the band-limit that
-  // the resample would have applied. Gaussians compose, so it folds into the
-  // frost instead of costing a second blur pass.
-  const frost = Math.hypot(blurLevel, sourceBandLimitSigma(budget.sourceScale));
-  // The region has to cover both what the frost reaches for and what the
-  // refraction reaches for. Anything a displaced sample lands on outside it
-  // reads as transparent black, which is what turned the player bar's bottom
-  // bezel into a hard inverted band.
-  const margin = Math.ceil(
-    Math.max(frost * 3 * budget.blurScale, maximumDisplacement + frost),
-  );
   const filter = svgElement("filter");
   setAttributes(filter, {
     id,
-    x: -margin,
-    y: -margin,
-    width: width + margin * 2,
-    height: height + margin * 2,
+    x: -blurLevel * 3,
+    y: -blurLevel * 3,
+    width: width + blurLevel * 6,
+    height: height + blurLevel * 6,
     filterUnits: "userSpaceOnUse",
     primitiveUnits: "userSpaceOnUse",
     colorInterpolationFilters: "sRGB",
@@ -480,7 +328,19 @@ function appendFilter(
   const blur = svgElement("feGaussianBlur");
   setAttributes(blur, {
     in: "SourceGraphic",
-    stdDeviation: frost,
+    stdDeviation: blurLevel,
+    result: "blurred_frost",
+  });
+  // Saturation is part of what distinguishes the two material families, not a
+  // decoration: Liquid Glass keeps the backdrop's colour (slightly boosted),
+  // while the Classic stops drain it toward neutral. Applied to the frosted
+  // backdrop before displacement so the refracted rim carries the same colour
+  // treatment as the panel interior.
+  const saturate = svgElement("feColorMatrix");
+  setAttributes(saturate, {
+    in: "blurred_frost",
+    type: "saturate",
+    values: saturation,
     result: "blurred_source",
   });
   // Both maps overdraw the panel by 1px per side: layout sizes can be
@@ -497,15 +357,9 @@ function appendFilter(
     preserveAspectRatio: "none",
     result: "displacement_map",
   });
-  // feDisplacementMap offsets by `scale * (channel/255 - 0.5)`, so a channel
-  // at either extreme moves the sample by half the scale. Deriving the scale
-  // from the peak displacement — rather than using it as the scale directly —
-  // is what keeps one 8-bit level worth well under a pixel: at the default
-  // preset a level is ~0.09px, where it used to be ~2px and every gradient in
-  // the map showed up as a visible step.
-  const baseScale = maximumDisplacement * 2;
+  const baseScale = maps.maximumDisplacement * refractionLevel;
   const channelSplay =
-    baseScale *
+    maps.maximumDisplacement *
     (FIGMA_GLASS_PRESET.dispersion / 100) *
     (FIGMA_GLASS_PRESET.splay / 100);
 
@@ -537,7 +391,7 @@ function appendFilter(
     filter.append(displaced, isolate);
   };
 
-  filter.append(blur, displacementImage);
+  filter.append(blur, saturate, displacementImage);
   appendChannel(
     "red",
     baseScale + channelSplay,
@@ -584,19 +438,26 @@ function geometryKey(width: number, height: number, radius: number): string {
  */
 export function LiquidGlassDefs() {
   const defsRef = useRef<SVGDefsElement>(null);
-  // The Glass-blur slider drives the shader's Gaussian blur. Held in a ref so
-  // the observer effect (mounted once) always reads the live value without
-  // being torn down and rebuilt on every slider tick.
-  const glassBlur = useSettingsStore((s) => s.glassBlur);
-  const blurRef = useRef(glassBlur);
-  blurRef.current = clampGlassBlur(glassBlur);
-  // Set by the observer effect; lets the slider force a re-measure of every
-  // live glass panel so the new blur is baked into fresh per-surface filters.
+  // The chosen material drives the shader's Gaussian blur: on macOS the id
+  // names a real system material, and here it selects the frost that
+  // synthesizes the same stop. Held in a ref so the observer effect (mounted
+  // once) always reads the live value without being torn down and rebuilt.
+  const glassMaterial = useSettingsStore((s) => s.glassMaterial);
+  const { frost, saturation, refraction } =
+    webGlassMaterialTokens(glassMaterial);
+  const blurRef = useRef(frost);
+  blurRef.current = frost;
+  const saturationRef = useRef(saturation);
+  saturationRef.current = saturation;
+  const refractionRef = useRef(refraction);
+  refractionRef.current = refraction;
+  // Set by the observer effect; lets a material change force a re-measure of
+  // every live glass panel so the new frost is baked into fresh filters.
   const remeasureAllRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     remeasureAllRef.current?.();
-  }, [glassBlur]);
+  }, [frost, saturation, refraction]);
 
   useEffect(() => {
     if (!isWindowsWebview() || !defsRef.current) return;
@@ -630,30 +491,39 @@ export function LiquidGlassDefs() {
       // changes the regular radius.
       const blurLevel =
         blurRef.current * (isSmall ? SMALL_GLASS_FROST_RATIO : 1);
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}`;
+      const refracts = refractionRef.current;
+      const saturation = saturationRef.current;
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}s${saturation}${refracts ? "r" : "f"}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
+
+      // A Classic material is a frosted pane, not a lens: macOS gives it a
+      // heavy blur and an opacity tint with no edge displacement. Resolving it
+      // to a plain CSS backdrop filter is both the faithful rendering and the
+      // cheap one — no displacement raster, no per-surface SVG filter, nothing
+      // to invalidate on resize.
+      if (!refracts) {
+        const plain = `blur(${blurLevel}px) saturate(${saturation})`;
+        element.style.setProperty("--liquid-glass-filter", plain);
+        element.style.setProperty("backdrop-filter", plain);
+        element.style.setProperty("-webkit-backdrop-filter", plain);
+        element.dataset.liquidGlassReady = "true";
+        if (registration.filterId) {
+          defs.querySelector(`#${CSS.escape(registration.filterId)}`)?.remove();
+          registration.filterId = null;
+        }
+        return;
+      }
       // createConvexRefractionProfile already consumes Figma's 70% value;
       // applying another 0.7 multiplier would attenuate it twice.
       const refractionLevel = 1;
-      const budget = getGlassResolutionBudget();
       // Raster maps stay cached in 8px buckets (feImage stretches them the
       // last few pixels), but the filter geometry itself is exact — a bucket
       // rounded below the panel size leaves an unmapped displacement strip.
-      const geometryPart = geometryKey(width, height, radius);
-      const [size, radiusPart] = geometryPart.split("r");
+      const key = geometryKey(width, height, radius);
+      const [size, radiusPart] = key.split("r");
       const [mapWidth, mapHeight] = size.split("x").map(Number);
-      // Displacement texel density is part of the raster's identity: a cached
-      // map from another density describes the same bezel at the wrong
-      // resolution.
-      const key = `${geometryPart}d${budget.displacementScale}`;
-      const maps = getCachedMaps(
-        key,
-        mapWidth,
-        mapHeight,
-        Number(radiusPart),
-        budget,
-      );
+      const maps = getCachedMaps(key, mapWidth, mapHeight, Number(radiusPart));
       // Fresh id per geometry change: swapping the url() reference is the
       // repaint signal Chromium reliably honors for backdrop filters. The
       // superseded per-surface filter is dropped right after, so defs holds
@@ -668,7 +538,7 @@ export function LiquidGlassDefs() {
         maps,
         blurLevel,
         refractionLevel,
-        budget,
+        saturation,
       );
       const filterValue = `url("#${id}")`;
       element.style.setProperty("--liquid-glass-filter", filterValue);

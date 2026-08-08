@@ -41,5 +41,32 @@ export default defineConfig(async () => ({
     watch: {
       ignored: ["**/src-tauri/**"],
     },
+    // Opening the dev server in a browser (for Glass Lab, or any frontend
+    // work) has no Rust side, so InnerTube calls would be blocked by CORS.
+    // Forwarding them server-side makes the app usable as guest in a plain
+    // tab. Dev only — the packaged app always goes through the Tauri http
+    // plugin, which needs no proxy. See `innertubeFetch` in
+    // `src/lib/innertube/shared.ts`.
+    proxy: {
+      "/__ytm": {
+        target: "https://music.youtube.com",
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/__ytm/, ""),
+        // `Origin`, `Referer` and the `Sec-Fetch-*` family are forbidden
+        // header names, so the ones the client sets in BASE_HEADERS are
+        // dropped and the browser's own (localhost) values go out instead.
+        // InnerTube answers those with a 403 "Sorry" page. Only the proxy can
+        // put them right, because it is not a browser.
+        configure(proxy) {
+          proxy.on("proxyReq", (proxyReq) => {
+            proxyReq.setHeader("origin", "https://music.youtube.com");
+            proxyReq.setHeader("referer", "https://music.youtube.com/");
+            proxyReq.setHeader("sec-fetch-site", "same-origin");
+            proxyReq.setHeader("sec-fetch-mode", "same-origin");
+            proxyReq.setHeader("sec-fetch-dest", "empty");
+          });
+        },
+      },
+    },
   },
 }));

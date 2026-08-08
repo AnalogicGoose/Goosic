@@ -12,7 +12,7 @@ import { routeTree } from "@/routeTree.gen";
 import { isFloatingPlayerWindow } from "@/lib/floating-player";
 import FloatingPlayerApp from "@/components/layout/floating-player-app";
 import { useSettingsStore } from "@/lib/store/settings";
-import { useGlassBlur, useGlassMaterial, useVisualTheme } from "@/lib/themes";
+import { useGlassMaterial, useVisualTheme } from "@/lib/themes";
 
 const router = createRouter({
   routeTree,
@@ -29,10 +29,8 @@ declare module "@tanstack/react-router" {
 
 export default function App() {
   const visualTheme = useSettingsStore((state) => state.visualTheme);
-  const glassBlur = useSettingsStore((state) => state.glassBlur);
   const glassMaterial = useSettingsStore((state) => state.glassMaterial);
   useVisualTheme(visualTheme);
-  useGlassBlur(glassBlur);
   useGlassMaterial(glassMaterial);
 
   // The same Vite bundle is loaded in both windows; the standalone

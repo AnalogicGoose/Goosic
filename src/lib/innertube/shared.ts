@@ -1,5 +1,6 @@
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { invoke } from "@tauri-apps/api/core";
+import { hasTauriBackend } from "@/lib/platform";
 import type { ShelfItem, Thumbnail } from "./types";
 
 export type YtNode = Record<string, any>;
@@ -87,6 +88,8 @@ const BASE_HEADERS: Record<string, string> = {
 };
 
 const YTM_ORIGIN = "https://music.youtube.com";
+/** Dev-server path that proxies to YTM_ORIGIN. See `vite.config.ts`. */
+const YTM_DEV_PROXY_PREFIX = "/__ytm";
 
 async function sha1Hex(text: string): Promise<string> {
   const buf = new TextEncoder().encode(text);
@@ -132,6 +135,9 @@ let authPromise: Promise<AuthContext> | null = null;
 let authEpoch = 0;
 
 async function loadAuthContext(): Promise<AuthContext> {
+  // No Rust side in a plain browser tab: there is no cookie jar to read, so
+  // browse as a guest rather than throwing on an undefined `invoke`.
+  if (!hasTauriBackend()) return EMPTY_AUTH;
   const now = Date.now();
   if (authCache && now - authCache.loadedAt < AUTH_CACHE_TTL_MS) {
     return authCache.value;
@@ -200,6 +206,9 @@ export async function captureSetCookies(
   res: Response,
   auth: AuthContext,
 ): Promise<void> {
+  // Nothing to merge into without the Rust cookie jar, and a browser will not
+  // expose `set-cookie` to script anyway.
+  if (!hasTauriBackend()) return;
   const lines =
     typeof res.headers.getSetCookie === "function"
       ? res.headers.getSetCookie()
@@ -256,6 +265,21 @@ export async function authHeaders(): Promise<Record<string, string>> {
   return authHeadersFromContext(await loadAuthContext());
 }
 
+/**
+ * One HTTP call to InnerTube.
+ *
+ * In the app this is the Tauri http plugin, which is not subject to CORS and
+ * can see `set-cookie`. Opened directly in a browser during frontend work
+ * there is no such plugin, and the browser would block the cross-origin POST
+ * outright — so the request goes through the Vite dev proxy declared in
+ * `vite.config.ts`, which forwards it server-side. Guest data only: without
+ * the Rust cookie jar there is nothing to authenticate with.
+ */
+function innertubeFetch(url: string, init: RequestInit): Promise<Response> {
+  if (hasTauriBackend()) return tauriFetch(url, init as never);
+  return fetch(url.replace(YTM_ORIGIN, YTM_DEV_PROXY_PREFIX), init);
+}
+
 export async function innertubePost(
   endpoint: string,
   body: Record<string, unknown>,
@@ -267,7 +291,7 @@ export async function innertubePost(
   const visitorHeader: Record<string, string> = visitor
     ? { "X-Goog-Visitor-Id": visitor }
     : {};
-  const res = await tauriFetch(url, {
+  const res = await innertubeFetch(url, {
     method: "POST",
     headers: { ...BASE_HEADERS, ...visitorHeader, ...auth },
     body: JSON.stringify({ context: buildContext(), ...body }),

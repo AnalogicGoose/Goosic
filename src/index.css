@@ -369,9 +369,29 @@ html body [data-slot="sidebar-container"] {
   /* Active=True, front layer: Glass Effect. The neutral white multiply fill
      is visually identity in CSS; the two dark inner rims are literal. Small
      controls add Figma's third #e6e6e6 highlight. Pointer variables supply
-     the interaction light without changing any of the Figma effect values. */
+     the interaction light without changing any of the Figma effect values.
+
+     The one paint this layer does own is the luminosity fill. Refracting and
+     frosting the backdrop can only ever be as bright as what is behind the
+     panel, so over a dark app a pure-optics material renders as a dark hole —
+     while macOS renders a panel visibly lighter than its surroundings, which
+     is what keeps its menu labels legible over any wallpaper. Apple's material
+     is emissive, not just transmissive, and this is that term. */
+     The Classic family needs the opposite term as well: those materials dim
+     and neutralize the backdrop rather than lifting it, and by Thick/Chrome
+     they are closer to smoked perspex than to glass. Both layers are painted
+     unconditionally and the material tokens zero whichever one does not
+     apply. */
   .glass-material-interactive::after {
-    background: transparent;
+    background:
+      linear-gradient(
+        0deg,
+        rgb(0 0 0 / var(--glass-shade, 0%)) 0 100%
+      ),
+      linear-gradient(
+        0deg,
+        rgb(255 255 255 / var(--glass-luminosity, 14%)) 0 100%
+      );
     box-shadow: none;
   }
 
@@ -388,18 +408,26 @@ html body [data-slot="sidebar-container"] {
     mix-blend-mode: normal;
   }
 
-  /* Shared glass rim. This is the only CSS material paint: a single 1px
-     directional reflector matching the supplied Figma gradient. */
+  /* Shared glass rim: a 1px directional reflector on the supplied Figma
+     gradient, plus a continuous base so the edge never disappears entirely.
+     The Figma gradient alone drops to zero across the middle two stops, which
+     leaves the left and bottom edges unlit — macOS lights the whole perimeter
+     and merely biases it toward the top-left. The bias is what reads as a
+     light source; a rim that vanishes on two sides reads as a missing edge.
+     This matters most on the lightest materials: with Clear's 4px frost the
+     rim is nearly all that says a surface is there at all. */
   .glass-material::before {
     inset: 0;
     padding: 1.4px;
-    background: linear-gradient(
-      157deg,
-      rgb(255 255 255 / 40%) 2.12%,
-      rgb(255 255 255 / 0%) 39%,
-      rgb(255 255 255 / 0%) 54.33%,
-      rgb(255 255 255 / 10%) 93.02%
-    );
+    background:
+      linear-gradient(
+        157deg,
+        rgb(255 255 255 / 45%) 2.12%,
+        rgb(255 255 255 / 0%) 39%,
+        rgb(255 255 255 / 0%) 54.33%,
+        rgb(255 255 255 / 14%) 93.02%
+      ),
+      linear-gradient(0deg, rgb(255 255 255 / 10%) 0 100%);
     box-shadow: none;
     mix-blend-mode: normal;
     -webkit-mask:
@@ -443,6 +471,12 @@ html body [data-slot="sidebar-container"] {
   .glass-material-interactive {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
+    /* Outer shadow. A material floats above what it covers, and the shadow is
+       how that reads — without it a light stop has no separation from the
+       content behind it and looks like a tinted region rather than a panel.
+       Kept soft and low-contrast so it does not become a dark outline on the
+       already-dark chrome. */
+    box-shadow: 0 6px 24px rgb(0 0 0 / 22%);
   }
   .liquid-refract .glass-material-interactive {
     -webkit-backdrop-filter: var(--liquid-glass-filter, none);
@@ -482,12 +516,22 @@ html body [data-slot="sidebar-container"] {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
       background: transparent;
+      /* Same reasoning as the rim and the fill: the system material draws its
+         own shadow, so ours would stack a second one under it. */
+      box-shadow: none;
     }
     /* The system material draws its own rim and specular highlight, so the
        Figma reflector would read as a second, brighter edge stacked on it. */
     .macos-backdrop-glass
       .glass-material-interactive:not(.native-player-material)::before {
       content: none;
+    }
+    /* Same reasoning for the luminosity fill: the system material is already
+       emissive, so the CSS term that stands in for it elsewhere would only
+       wash this one out. */
+    .macos-backdrop-glass
+      .glass-material-interactive:not(.native-player-material)::after {
+      background: none;
     }
     [data-glass-material="blur-ultra-thin"]
       .glass-material-interactive:not(.native-player-material) {

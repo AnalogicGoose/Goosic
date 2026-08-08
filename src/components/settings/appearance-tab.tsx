@@ -7,7 +7,6 @@ import {
   WallpaperIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,7 +21,6 @@ import { Group, SettingRow, TabPane } from "@/components/settings/primitives";
 import { useLayoutStore, type LayoutMode } from "@/lib/store/layout";
 import { useSettingsStore, type BackgroundMode } from "@/lib/store/settings";
 import {
-  GLASS_BLUR_MAX,
   GLASS_MATERIAL_GROUPS,
   GLASS_MATERIALS,
   getGlassMaterial,
@@ -47,17 +45,17 @@ const BACKGROUND_OPTIONS: { value: BackgroundMode; label: string }[] = [
 export function AppearanceTab() {
   const visualTheme = useSettingsStore((s) => s.visualTheme);
   const setVisualTheme = useSettingsStore((s) => s.setVisualTheme);
-  const glassBlur = useSettingsStore((s) => s.glassBlur);
-  const setGlassBlur = useSettingsStore((s) => s.setGlassBlur);
   const glassMaterial = useSettingsStore((s) => s.glassMaterial);
   const setGlassMaterial = useSettingsStore((s) => s.setGlassMaterial);
   const layoutMode = useLayoutStore((s) => s.mode);
   const setLayoutMode = useLayoutStore((s) => s.setMode);
   const background = useSettingsStore((s) => s.background);
   const setBackground = useSettingsStore((s) => s.setBackground);
-  // Where WebKit hosts Apple's own material, the slider no longer sets a CSS
-  // radius — the OS owns the frost — so it picks a material stop instead. Read
-  // once: the capability cannot change while the window is open.
+  // Material selection is platform-independent now: macOS resolves these ids
+  // to real system materials, everywhere else the SVG renderer synthesizes the
+  // same stop from `WEB_GLASS_MATERIAL_TOKENS`. Only the wording differs, so
+  // the description can say which of the two is happening. Read once: the
+  // capability cannot change while the window is open.
   const [nativeMaterial] = useState(supportsNativeLiquidGlass);
 
   return (
@@ -111,81 +109,64 @@ export function AppearanceTab() {
         />
         <SettingRow
           icon={DropletsIcon}
-          title={nativeMaterial ? "Glass material" : "Glass blur"}
+          title="Glass material"
           description={
             nativeMaterial
               ? "Which system material the glass uses. macOS draws the frost itself, so this picks the material rather than a blur radius."
-              : "How much the glass frosts the content behind it. Higher is softer; zero shows a crisp backdrop."
+              : "How the glass frosts and lights the content behind it. Each stop matches one of the macOS system materials."
           }
           control={
-            nativeMaterial ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-44 justify-between gap-2"
-                    aria-label="Glass material"
-                  >
-                    {/* Both families have a "Regular", so the trigger names the
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-44 justify-between gap-2"
+                  aria-label="Glass material"
+                >
+                  {/* Both families have a "Regular", so the trigger names the
                         family too or the current choice reads ambiguously. */}
-                    <span className="flex min-w-0 items-baseline gap-1.5">
-                      <span className="truncate">
-                        {getGlassMaterial(glassMaterial).label}
-                      </span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {getGlassMaterial(glassMaterial).group}
-                      </span>
+                  <span className="flex min-w-0 items-baseline gap-1.5">
+                    <span className="truncate">
+                      {getGlassMaterial(glassMaterial).label}
                     </span>
-                    <ChevronDownIcon className="size-3.5 opacity-60" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-64">
-                  <DropdownMenuRadioGroup
-                    value={glassMaterial}
-                    onValueChange={(value) => {
-                      if (isGlassMaterialId(value)) setGlassMaterial(value);
-                    }}
-                  >
-                    {GLASS_MATERIAL_GROUPS.map((group, groupIndex) => (
-                      <Fragment key={group}>
-                        {groupIndex > 0 ? <DropdownMenuSeparator /> : null}
-                        <DropdownMenuLabel className="text-xs text-muted-foreground">
-                          {group}
-                        </DropdownMenuLabel>
-                        {GLASS_MATERIALS.filter(
-                          (item) => item.group === group,
-                        ).map((item) => (
-                          <DropdownMenuRadioItem key={item.id} value={item.id}>
-                            <span className="flex min-w-0 flex-col gap-0.5">
-                              <span>{item.label}</span>
-                              <span className="truncate text-xs text-muted-foreground">
-                                {item.description}
-                              </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {getGlassMaterial(glassMaterial).group}
+                    </span>
+                  </span>
+                  <ChevronDownIcon className="size-3.5 opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuRadioGroup
+                  value={glassMaterial}
+                  onValueChange={(value) => {
+                    if (isGlassMaterialId(value)) setGlassMaterial(value);
+                  }}
+                >
+                  {GLASS_MATERIAL_GROUPS.map((group, groupIndex) => (
+                    <Fragment key={group}>
+                      {groupIndex > 0 ? <DropdownMenuSeparator /> : null}
+                      <DropdownMenuLabel className="text-xs text-muted-foreground">
+                        {group}
+                      </DropdownMenuLabel>
+                      {GLASS_MATERIALS.filter(
+                        (item) => item.group === group,
+                      ).map((item) => (
+                        <DropdownMenuRadioItem key={item.id} value={item.id}>
+                          <span className="flex min-w-0 flex-col gap-0.5">
+                            <span>{item.label}</span>
+                            <span className="truncate text-xs text-muted-foreground">
+                              {item.description}
                             </span>
-                          </DropdownMenuRadioItem>
-                        ))}
-                      </Fragment>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
-              <div className="flex w-44 items-center gap-3">
-                <Slider
-                  value={[glassBlur]}
-                  min={0}
-                  max={GLASS_BLUR_MAX}
-                  step={1}
-                  aria-label="Glass blur radius"
-                  onValueChange={([v]) => setGlassBlur(v)}
-                  className="min-w-0 flex-1"
-                />
-                <span className="w-9 text-right text-xs font-medium tabular-nums text-muted-foreground">
-                  {glassBlur}px
-                </span>
-              </div>
-            )
+                          </span>
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </Fragment>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
           }
         />
         <SettingRow
