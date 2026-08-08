@@ -149,22 +149,6 @@ export function clampGlassBlur(value: number): number {
 }
 
 /**
- * Drive the shared `--glass-blur` radius every glass surface reads. Kept out
- * of `applyVisualTheme` so switching theme never resets the user's chosen
- * blur. Mounted in both the main and floating windows.
- */
-/**
- * macOS native-material stops, ordered lightest to heaviest.
- *
- * WebKit exposes Apple's materials to CSS through `-apple-visual-effect` (see
- * the `@supports` tiers in index.css). Both families are real system materials,
- * so the blur slider stops being a CSS radius there and becomes a picker across
- * these stops instead — the user's "how frosted is this" model survives, it just
- * quantizes to what the OS actually offers. Verified against WebKit with
- * `CSS.supports`; note the regular stop is the bare name in both families, as
- * the explicit `-regular` spelling is not a valid value.
- */
-/**
  * Every material WebKit accepts for `-apple-visual-effect`, verified against
  * the running engine with `CSS.supports`. Two families:
  *
@@ -227,6 +211,135 @@ export const GLASS_MATERIALS = [
 ] as const;
 
 export type GlassMaterialId = (typeof GLASS_MATERIALS)[number]["id"];
+
+/**
+ * What each material means to the web renderer.
+ *
+ * On macOS these ids name a real system material and the OS supplies the
+ * optics. Everywhere else the SVG pipeline has to *synthesize* the same stop,
+ * so each id needs concrete numbers.
+ *
+ * Four axes, because the two families behave in opposite directions — which is
+ * not obvious until you put all eight side by side over the same album art:
+ *
+ *  - **Liquid Glass** stays bright and *keeps the backdrop's colour*. Heavier
+ *    stops mostly mean more frost; the panel never turns grey. It is emissive
+ *    and slightly saturating, which is why it reads as glass over any wallpaper.
+ *  - **Classic** progressively *dims and desaturates*. Thick and Chrome are
+ *    near-neutral slabs with the colour drained out of them, closer to smoked
+ *    perspex than to glass.
+ *
+ * So a single "how frosted" scalar cannot express both. `luminosity` (white
+ * emission) and `shade` (neutral dimming) are separate rather than one signed
+ * value because Liquid Glass wants some of each — lifted *and* slightly
+ * deepened — while Classic wants shade alone.
+ *
+ * Calibrated by eye against screenshots of all eight native materials over the
+ * same backdrop. A visual match target, not a claim about Apple's internal
+ * constants: those are not exposed to CSS, and the only way to read them is off
+ * rendered pixels.
+ */
+export type WebGlassMaterialTokens = {
+  /** Backdrop blur radius, in CSS pixels, at the medium/large scale. */
+  frost: number;
+  /** White emission, in percent. The term a transmissive-only material lacks. */
+  luminosity: number;
+  /** Neutral dimming, in percent. Carries the Classic family's descent. */
+  shade: number;
+  /** Backdrop saturation multiplier. Above 1 for glass, below 1 for Classic. */
+  saturation: number;
+  /**
+   * Whether this material bends light at its edge.
+   *
+   * Only the Liquid Glass family does. The Classic materials are frosted
+   * panes, not lenses: macOS renders them as a heavy blur plus an opacity
+   * tint, with no displacement at the rim at all. So the family selects the
+   * renderer, not merely its parameters — a Classic stop skips the SVG
+   * displacement pipeline entirely and resolves to a plain CSS
+   * `blur() saturate()` backdrop filter, which is both more faithful and far
+   * cheaper than refracting a backdrop that Apple does not refract.
+   */
+  refraction: boolean;
+};
+
+export const WEB_GLASS_MATERIAL_TOKENS: Record<
+  GlassMaterialId,
+  WebGlassMaterialTokens
+> = {
+  // Calibrated against the native player bar over album art, 2026-08-07. The
+  // whole family is lighter than a first reading of the settings dialog
+  // suggested: on macOS the artwork behind Clear stays legible face-by-face,
+  // Regular blurs it moderately while keeping its colour, and even Subdued
+  // remains translucent — it darkens more than it obscures. Frost is the axis
+  // that was consistently too heavy here; do not raise it to make a stop read
+  // as "more material", use shade for that, which is what Apple does.
+  "glass-clear": {
+    frost: 4,
+    luminosity: 6,
+    shade: 0,
+    saturation: 1.1,
+    refraction: true,
+  },
+  "glass-regular": {
+    frost: 12,
+    luminosity: 10,
+    shade: 0,
+    saturation: 1.3,
+    refraction: true,
+  },
+  "glass-subdued": {
+    frost: 18,
+    luminosity: 5,
+    shade: 16,
+    saturation: 1.1,
+    refraction: true,
+  },
+  // The Classic stops are frosted panes: heavy blur, an opacity tint, no lens.
+  // Their frost runs far above the glass family's because the blur is the whole
+  // effect rather than one layer of it.
+  "blur-ultra-thin": {
+    frost: 24,
+    luminosity: 4,
+    shade: 12,
+    saturation: 1.1,
+    refraction: false,
+  },
+  "blur-thin": {
+    frost: 40,
+    luminosity: 4,
+    shade: 20,
+    saturation: 0.95,
+    refraction: false,
+  },
+  "blur-regular": {
+    frost: 60,
+    luminosity: 3,
+    shade: 30,
+    saturation: 0.8,
+    refraction: false,
+  },
+  "blur-thick": {
+    frost: 85,
+    luminosity: 3,
+    shade: 42,
+    saturation: 0.6,
+    refraction: false,
+  },
+  "blur-chrome": {
+    frost: 100,
+    luminosity: 5,
+    shade: 38,
+    saturation: 0.45,
+    refraction: false,
+  },
+};
+
+export function webGlassMaterialTokens(id: GlassMaterialId) {
+  return (
+    WEB_GLASS_MATERIAL_TOKENS[id] ??
+    WEB_GLASS_MATERIAL_TOKENS[GLASS_MATERIAL_DEFAULT]
+  );
+}
 export const GLASS_MATERIAL_DEFAULT: GlassMaterialId = "glass-regular";
 
 /** Distinct group names, in declaration order, for rendering menu sections. */
@@ -261,33 +374,26 @@ export function getGlassMaterial(
   );
 }
 
-
 /**
- * Drive the shared `--glass-blur` radius every glass surface reads. Kept out
- * of `applyVisualTheme` so switching theme never resets the user's chosen
- * blur. Mounted in both the main and floating windows.
- *
- */
-export function useGlassBlur(blurPx: number): void {
-  useEffect(() => {
-    const blur = clampGlassBlur(blurPx);
-    document.documentElement.style.setProperty("--glass-blur", `${blur}px`);
-    document.documentElement.style.setProperty(
-      "--glass-blur-small",
-      `${Math.round(blur * (6 / 16) * 100) / 100}px`,
-    );
-  }, [blurPx]);
-}
-
-/**
- * Publish the chosen macOS material. Both family attributes are written
+ * Publish the chosen material. Both family attributes are written
  * unconditionally; the stylesheet's `@supports` tiers decide which one (if
  * either) applies, so this never has to know the macOS version. A platform
  * without either simply ignores both attributes and keeps the CSS blur.
  */
 export function useGlassMaterial(material: GlassMaterialId): void {
   useEffect(() => {
-    document.documentElement.dataset.glassMaterial = material;
+    const root = document.documentElement;
+    root.dataset.glassMaterial = material;
+    // The synthesized side of the same choice. Harmless on macOS: the
+    // `@supports` block clears the fill the system material already provides.
+    const { frost, luminosity, shade } = webGlassMaterialTokens(material);
+    root.style.setProperty("--glass-blur", `${frost}px`);
+    root.style.setProperty(
+      "--glass-blur-small",
+      `${Math.round(frost * (6 / 16) * 100) / 100}px`,
+    );
+    root.style.setProperty("--glass-luminosity", `${luminosity}%`);
+    root.style.setProperty("--glass-shade", `${shade}%`);
   }, [material]);
 }
 

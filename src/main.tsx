@@ -18,6 +18,20 @@ if (usesRoundedNativeWindow()) {
 // DevTools stay reachable via F12 / Ctrl+Shift+I.
 window.addEventListener("contextmenu", (e) => e.preventDefault());
 
+// Glass Lab is reachable from inside the app in dev because that is the only
+// place the macOS material actually exists: `-apple-visual-effect` is private
+// and only resolves in this WKWebView, never in Chrome. Cmd/Ctrl+Shift+G does
+// a real page navigation, so the lab loads in the same native window with the
+// same WKPreferences. The lab binds the same chord to come back.
+if (import.meta.env.DEV) {
+  window.addEventListener("keydown", (event) => {
+    if (!event.shiftKey || !(event.metaKey || event.ctrlKey)) return;
+    if (event.key.toLowerCase() !== "g") return;
+    event.preventDefault();
+    window.location.href = "/glass-lab.html";
+  });
+}
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />

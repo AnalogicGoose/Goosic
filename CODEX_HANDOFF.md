@@ -3,10 +3,10 @@
 > **Read this file first in every new Codex session.** It is the durable product,
 > engineering, UI, release, and troubleshooting context for this repository.
 >
-> Last verified: **2026-07-22**
-> Current app version: **0.5.3**
-> Current release candidate: **v0.5.3 macOS playback bridge and queue hardening**
-> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.5.2>
+> Last verified: **2026-08-07**
+> Current app version: **0.5.9**
+> Current release candidate: **v0.5.9 macOS-accurate glass material**
+> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.5.8>
 
 ## 1. New-session quick start
 
@@ -686,7 +686,7 @@ The source of truth is Figma page `GLASSS` (`49:40801`) in the BBTOV file. Its
   pseudo layers reproduce the Figma outline/side-light stack and multiply fill.
 - Small materials use the Figma 6px frost radius and compact shadow recipe.
   Medium/large materials use a 16px frost radius and their heavier shadow
-  recipe. The user Glass blur preference scales both values at the same 6:16
+  recipe. The selected material's frost scales both values at the same 6:16
   ratio instead of flattening the two Figma sizes into one blur.
 - Tinted interactive controls keep Figma's order and blend modes: Fill + Shadow,
   White Backing, the four-paint Tint stack (`plus-darker`, `overlay`,
@@ -701,6 +701,63 @@ glass, secondary/outline buttons use static small glass, and ghost/link buttons
 remain flat so controls nested inside a glass surface do not create glass on
 glass. Menus, popovers, dialogs, sidebar, and players reuse these primitives;
 do not rebuild their material stack locally.
+
+### Glass material selection (one control, two families)
+
+There is no Glass blur slider any more. Settings exposes a single **Glass
+material** picker on every platform, listing the eight ids in
+`GLASS_MATERIALS`. All eight were verified to resolve on macOS 27 with
+`CSS.supports("-apple-visual-effect", …)` on 2026-08-07 — both families, every
+stop, no silent degradation.
+
+- On macOS the id names a real system material and the OS supplies the optics.
+- Everywhere else `WEB_GLASS_MATERIAL_TOKENS` in `themes.ts` synthesizes the
+  same stop from `{ frost, luminosity, shade, saturation, refraction }`.
+  `useGlassMaterial()` publishes `data-glass-material` plus the
+  `--glass-blur` / `--glass-blur-small` / `--glass-luminosity` /
+  `--glass-shade` tokens, so one choice drives both paths.
+
+The two families are not one scale with different numbers — they behave in
+opposite directions, and this is the thing to preserve:
+
+- **Liquid Glass** (`glass-*`) refracts, stays bright, and *keeps the
+  backdrop's colour* (saturation above 1). Heavier stops mostly mean more
+  frost.
+- **Classic** (`blur-*`) does not refract at all. macOS renders these as a
+  heavy blur plus an opacity tint, so the web renderer skips the displacement
+  pipeline entirely and writes a plain `blur() saturate()` backdrop filter.
+  Their frost runs 24-100px because the blur *is* the effect. They dim
+  (`shade`) and desaturate as they get heavier, ending near-neutral.
+
+`luminosity` and `shade` are separate rather than one signed value: Liquid
+Glass wants a little of each, Classic wants shade alone. The luminosity term
+exists because a purely transmissive material can never be brighter than what
+is behind it — over near-black chrome it renders as a dark hole, while Apple's
+material is emissive and stays visibly lighter than its surroundings. It is
+painted by `.glass-material-interactive::after` and explicitly cleared inside
+the `@supports (-apple-visual-effect: …)` block so it cannot stack on the
+system material.
+
+### Glass Lab (dev bench)
+
+`glass-lab.html` + `src/dev/glass-lab.tsx`, served by Vite at
+`/glass-lab.html`, mounts the real `LiquidGlassDefs` and the real
+`glass-surface.ts` constants over four diagnostic backdrops (`chroma`,
+`grid`, `contrast`, `app`). Nothing in it re-implements the material.
+
+The two renderers cannot be compared in one browser: Chromium is the only
+engine that runs an SVG filter in `backdrop-filter`, and `-apple-visual-effect`
+only resolves inside the app's own WKWebView. So:
+
+- In Chrome, `?platform=windows` forces the SVG path. `src/lib/platform.ts`
+  has a dev-only override (`?platform=windows|macos|linux|auto`, persisted in
+  localStorage, never consulted in a production build).
+- In the app, **Cmd/Ctrl+Shift+G** navigates to the lab in the same native
+  window, with the same `WKPreferences`, which is the only way to see the real
+  macOS material. The same chord returns to the app.
+- The lab's status line reports which renderer is *actually* painting, not
+  which one was requested, so Chromium's fallback blur cannot be mistaken for
+  Apple's material.
 
 Interactive materials select the renderer by platform:
 
