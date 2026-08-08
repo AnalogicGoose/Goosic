@@ -61,11 +61,13 @@ function roundedRectSdf(
 ): number {
   const qx = Math.abs(x - width / 2) - (width / 2 - radius);
   const qy = Math.abs(y - height / 2) - (height / 2 - radius);
-  return (
-    Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) +
-    Math.min(Math.max(qx, qy), 0) -
-    radius
-  );
+  // `Math.sqrt` of the sum of squares rather than `Math.hypot`: hypot guards
+  // against intermediate overflow, which cannot happen for raster coordinates,
+  // and it costs several times as much. This runs a few million times per map.
+  const outerX = qx > 0 ? qx : 0;
+  const outerY = qy > 0 ? qy : 0;
+  const outer = Math.sqrt(outerX * outerX + outerY * outerY);
+  return outer + Math.min(Math.max(qx, qy), 0) - radius;
 }
 
 /**
@@ -95,6 +97,24 @@ const MAX_LENS_BAND_PX = 34;
  * large panels reach far later than a hard 512 did.
  */
 const MAX_MAP_TEXELS = 1_400_000;
+
+/**
+ * One neutral displacement texel, packed little-endian as ABGR: r=g=b=128
+ * (no offset on either axis) with an opaque alpha.
+ */
+const NEUTRAL_TEXEL = 0xff808080;
+
+let scratchX: Float32Array = new Float32Array(0);
+let scratchY: Float32Array = new Float32Array(0);
+
+/** Grow-only scratch buffers for one map's traced vector field. */
+function scratchFields(size: number): [Float32Array, Float32Array] {
+  if (scratchX.length < size) {
+    scratchX = new Float32Array(size);
+    scratchY = new Float32Array(size);
+  }
+  return [scratchX, scratchY];
+}
 
 function displacementRasterScale(width: number, height: number): number {
   const ratio =
@@ -153,15 +173,31 @@ function createMaps(
     rasterWidth,
     rasterHeight,
   );
+  // The interior is neutral by construction, so fill the whole buffer with the
+  // neutral texel in one memset and only compute the rim. Writing 128/128/128
+  // per channel plus an opaque alpha is a single 32-bit pattern, which lets a
+  // 1.4M-texel map skip 1.4M iterations of per-channel assignment.
+  new Uint32Array(displacementImage.data.buffer).fill(NEUTRAL_TEXEL);
+
   // Two passes: trace the vector field in floating point, then quantize it.
   // Quantizing per texel against a guessed peak is what produced visible steps
   // — the peak has to be known before anything is written to 8 bits.
-  const fieldX = new Float32Array(rasterWidth * rasterHeight);
-  const fieldY = new Float32Array(rasterWidth * rasterHeight);
+  //
+  // The buffers are reused across calls rather than allocated per map: at the
+  // texel budget a fresh pair is ~11 MB that has to be allocated and zeroed
+  // every time a surface resizes. The encode pass zeroes each entry as it
+  // consumes it, so they are always handed back all-zero.
+  const [fieldX, fieldY] = scratchFields(rasterWidth * rasterHeight);
   let peak = 0;
 
-  for (let y = 0; y < rasterHeight; y += 1) {
-    for (let x = 0; x < rasterWidth; x += 1) {
+  // Only the band carries a displacement, and a texel can only be within
+  // `bandWidth` of the boundary if it is within `bandWidth` of one of the four
+  // sides. Walking the ring instead of the full raster is exact for a rounded
+  // rectangle, and skips the SDF entirely across the interior — which is most
+  // of a large panel.
+  const ring = Math.ceil(bandWidth) + 2;
+  const visitRow = (y: number, fromX: number, toX: number) => {
+    for (let x = fromX; x < toX; x += 1) {
       const index = y * rasterWidth + x;
       let sumX = 0;
       let sumY = 0;
@@ -201,7 +237,7 @@ function createMaps(
         // surface the two are identical.
         const aspectX = (sampleX - halfWidth) / halfWidth;
         const aspectY = (sampleY - halfHeight) / halfHeight;
-        const length = Math.hypot(aspectX, aspectY) || 1;
+        const length = Math.sqrt(aspectX * aspectX + aspectY * aspectY) || 1;
         // Magnitude scales with the band, not with the panel. The reference
         // shader multiplies by `glassSize * 0.5`, which is fine for the 120x80
         // panel it demonstrates on but means up to 360px of shift on a 720px
@@ -225,6 +261,19 @@ function createMaps(
       fieldY[index] = displacementY;
       peak = Math.max(peak, Math.abs(displacementX), Math.abs(displacementY));
     }
+  };
+
+  const topRows = Math.min(ring, rasterHeight);
+  const bottomStart = Math.max(topRows, rasterHeight - ring);
+  for (let y = 0; y < topRows; y += 1) visitRow(y, 0, rasterWidth);
+  for (let y = bottomStart; y < rasterHeight; y += 1)
+    visitRow(y, 0, rasterWidth);
+  // The middle rows only need their two ends.
+  const sideWidth = Math.min(ring, rasterWidth);
+  for (let y = topRows; y < bottomStart; y += 1) {
+    visitRow(y, 0, sideWidth);
+    if (rasterWidth - ring > sideWidth)
+      visitRow(y, rasterWidth - ring, rasterWidth);
   }
 
   // An 8-bit channel gives 127 levels per direction, so a large panel's peak
@@ -242,15 +291,28 @@ function createMaps(
     );
   };
 
-  for (let y = 0; y < rasterHeight; y += 1) {
-    for (let x = 0; x < rasterWidth; x += 1) {
+  // Only the band was traced, so only the band needs encoding — everything
+  // else is already the neutral texel from the memset above.
+  const encodeRow = (y: number, fromX: number, toX: number) => {
+    for (let x = fromX; x < toX; x += 1) {
       const index = y * rasterWidth + x;
+      const displacementX = fieldX[index];
+      const displacementY = fieldY[index];
+      if (displacementX === 0 && displacementY === 0) continue;
+      fieldX[index] = 0;
+      fieldY[index] = 0;
       const offset = index * 4;
-      displacementImage.data[offset] = encode(fieldX[index], x, y);
-      displacementImage.data[offset + 1] = encode(fieldY[index], x, y);
-      displacementImage.data[offset + 2] = 128;
-      displacementImage.data[offset + 3] = 255;
+      displacementImage.data[offset] = encode(displacementX, x, y);
+      displacementImage.data[offset + 1] = encode(displacementY, x, y);
     }
+  };
+  for (let y = 0; y < topRows; y += 1) encodeRow(y, 0, rasterWidth);
+  for (let y = bottomStart; y < rasterHeight; y += 1)
+    encodeRow(y, 0, rasterWidth);
+  for (let y = topRows; y < bottomStart; y += 1) {
+    encodeRow(y, 0, sideWidth);
+    if (rasterWidth - ring > sideWidth)
+      encodeRow(y, rasterWidth - ring, rasterWidth);
   }
 
   displacementContext.putImageData(displacementImage, 0, 0);
