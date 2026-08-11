@@ -4,8 +4,8 @@
 > engineering, UI, release, and troubleshooting context for this repository.
 >
 > Last verified: **2026-08-07**
-> Current app version: **0.5.9**
-> Current release candidate: **v0.5.9 macOS-accurate glass material**
+> Current app version: **0.6.0**
+> Current release candidate: **v0.6.0 macOS-accurate glass material**
 > Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.5.8>
 
 ## 1. New-session quick start
@@ -638,13 +638,13 @@ Linux runs with WebKitGTK's accelerated DMA-BUF renderer disabled
 and was the app's single most expensive thing to paint. Measured with the real
 stack at 1600x900 on WebKitGTK 2.52.5:
 
-| Variant                                  | FPS  |
-| ---------------------------------------- | ---- |
+| Variant                                     | FPS  |
+| ------------------------------------------- | ---- |
 | As shipped (`blur(clamp(110px,9vw,160px))`) | 4.4  |
-| Only the outer grid transform animating  | 4.2  |
-| Nothing animating, blur kept             | 14.2 |
-| `blur(40px)` instead                     | 13.7 |
-| Animated, filter removed entirely        | 57.0 |
+| Only the outer grid transform animating     | 4.2  |
+| Nothing animating, blur kept                | 14.2 |
+| `blur(40px)` instead                        | 13.7 |
+| Animated, filter removed entirely           | 57.0 |
 
 The animation is therefore not the cost — the number of blurred pixels is.
 `MeshLayer` adds `album-mesh-lowres` when `isLinuxWebview()`, which sizes the
@@ -720,13 +720,13 @@ stop, no silent degradation.
 The two families are not one scale with different numbers — they behave in
 opposite directions, and this is the thing to preserve:
 
-- **Liquid Glass** (`glass-*`) refracts, stays bright, and *keeps the
-  backdrop's colour* (saturation above 1). Heavier stops mostly mean more
+- **Liquid Glass** (`glass-*`) refracts, stays bright, and _keeps the
+  backdrop's colour_ (saturation above 1). Heavier stops mostly mean more
   frost.
 - **Classic** (`blur-*`) does not refract at all. macOS renders these as a
   heavy blur plus an opacity tint, so the web renderer skips the displacement
   pipeline entirely and writes a plain `blur() saturate()` backdrop filter.
-  Their frost runs 24-100px because the blur *is* the effect. They dim
+  Their frost runs 24-100px because the blur _is_ the effect. They dim
   (`shade`) and desaturate as they get heavier, ending near-neutral.
 
 `luminosity` and `shade` are separate rather than one signed value: Liquid
@@ -755,7 +755,7 @@ only resolves inside the app's own WKWebView. So:
 - In the app, **Cmd/Ctrl+Shift+G** navigates to the lab in the same native
   window, with the same `WKPreferences`, which is the only way to see the real
   macOS material. The same chord returns to the app.
-- The lab's status line reports which renderer is *actually* painting, not
+- The lab's status line reports which renderer is _actually_ painting, not
   which one was requested, so Chromium's fallback blur cannot be mistaken for
   Apple's material.
 
@@ -769,12 +769,46 @@ Interactive materials select the renderer by platform:
   unblurred on every platform.
 - `src/components/layout/liquid-glass-defs.tsx` registers only
   `.glass-material-interactive` elements. Its dimension-matched SVG filters
-  implement the Figma preset (70% refraction, 30 depth, 25% intensity, -60Â°
-  20% dispersion, 20% splay) with a 127-sample
-  convex-squircle/Snell-law map and
-  separately displaced RGB channels. CSS adds one masked 1px directional rim
-  using the supplied 157deg white gradient; there are no other CSS fills,
-  shadows, specular fallbacks, or pointer-light layers.
+  implement the Figma preset (70% refraction, 30 depth, 25% intensity, -101Â°
+  20% dispersion, 20% splay) with the v0.5.8 127-sample
+  convex-squircle/Snell-law map and separately displaced RGB channels. Every
+  generated displacement map has a matching rasterized specular map using the
+  supplied fixed -101-degree light direction; the filter composites that
+  highlight after refraction and all material paints so the tint cannot wash
+  the rim out. Specular alpha is restricted to a 2.25px edge band independent
+  of the deeper displacement bezel, preventing tall surfaces from becoming a
+  directional gradient box. Interactive surfaces do not stack the old CSS
+  rim over the specular map. Static surfaces and current `blur-*` Classic stops
+  retain the v0.5.8 CSS reflector. The current material picker still controls
+  frost, saturation, and whether a stop uses the refractive SVG path or the
+  Classic plain-blur path.
+- The Windows SVG pipeline composites the supplied Figma frame paints after
+  refraction: `#101010` with additive/Plus Lighter arithmetic,
+  followed by `#FFFFFF` at 4% with Luminosity blending. These paints belong in
+  the SVG chain; CSS pseudo-elements remain transparent because WebView2
+  isolates their blend context and otherwise turns the base into an opaque
+  dark panel.
+- The current Windows `glass-regular` stop adds its supplied Figma paints on
+  top of that frame: `#404040` at 80% with Luminosity blending, followed by
+  `#FFFFFF` at 20% with Overlay blending. Its synthesized frost is 5px with
+  1.35x saturation; `glass-clear` uses 1px frost. Every paint flood is bounded
+  to the surface dimensions rather than the expanded blur region; otherwise a
+  wide player can render a second, empty bar outside its real bounds.
+- Windows `glass-subdued` is calibrated against the native 2560x1440 player
+  capture at 14px frost, 1.2x saturation, 22% neutral shade, and 2% luminosity.
+  The shade/luminosity pair is composited in the SVG chain so Subdued darkens
+  while preserving album colour instead of becoming a high-frost milky bar.
+- The `liquid-refract` Windows platform class applies the visually calibrated
+  continuous-corner treatment across the entire UI: non-small glass surfaces
+  use a 32px radius and rounded boxes/pseudo-elements use
+  `corner-shape: round` (K=1). K=2 and the intermediate K=1.35 curve were both
+  visibly flatter than the native macOS capture at the app's scale. SVG
+  displacement/specular maps use the same per-surface K=1 SDF; keeping a
+  flatter map curve here breaks the refracted ends. macOS is excluded because
+  its system controls/materials already use native continuous corners.
+- The bottom/floating player uses a constrained 9999px radius with the same
+  `corner-shape: round` (K=1), matching the native capsule silhouette. Its
+  cached SVG maps include that K=1 variant too.
 - A MutationObserver + ResizeObserver gives every live surface its own filter;
   detached portals are unregistered. Maps cap their longest raster edge at
   512px, release temporary canvas buffers immediately, and use a 16-entry LRU.
@@ -944,7 +978,7 @@ Four assets plus `latest.json`, down from eleven. The `.deb`/`.rpm` bundles were
 dropped, and the `.sig` files are no longer attached as assets — see below.
 
 **Updater signatures are still generated (changed 2026-07-25).**
-`createUpdaterArtifacts: true` stays on; only the *upload* of the `.sig` files is
+`createUpdaterArtifacts: true` stays on; only the _upload_ of the `.sig` files is
 disabled, via `uploadUpdaterSignatures: false` on each `tauri-action` step. That
 input requires **tauri-action v1**, which is why all three jobs moved from `@v0`
 to `@v1` (the six inputs this workflow passes all exist in v1; none of the
@@ -1161,7 +1195,7 @@ installed/bundled, skipping", embeds the update information anyway and exits 0:
 a partial failure that looks like success.
 
 The zsync is therefore generated explicitly by a `zsyncmake` step. This is safe
-in a way that patching `.upd_info` would not be — the zsync is derived *from* the
+in a way that patching `.upd_info` would not be — the zsync is derived _from_ the
 finished AppImage and modifies not one byte of it, so the `.sig` and
 `latest.json` behind `tauri-plugin-updater` stay valid. Its output was verified
 byte-for-byte identical to appimagetool's. Use `-u <bare file name>` so the zsync
@@ -1172,7 +1206,7 @@ bundle — so a dedicated upload step attaches it. Both the embedded string and 
 "Verify AppImage update information and zsync" step; it fails the release rather
 than shipping a silently non-updatable AppImage.
 
-This runs *inside* tauri-bundler, so the AppImage is final before Tauri signs
+This runs _inside_ tauri-bundler, so the AppImage is final before Tauri signs
 it: the `.sig` and `latest.json` consumed by `tauri-plugin-updater` stay valid.
 **Do not patch `.upd_info` after the bundle is produced** — that changes the
 bytes Tauri already signed and breaks the in-app updater. The two update paths
@@ -1216,7 +1250,7 @@ Two constraints bound any fix, both verified against real `music.youtube.com`:
   never creates its media element at all (twelve consecutive samples reporting
   none); mapped, advertisements and then the track play normally. The
   "a mapped GTK surface is required" comment in that function is accurate.
-- **Hiding after startup is not enough.** Playback *does* survive unmapping
+- **Hiding after startup is not enough.** Playback _does_ survive unmapping
   once it has started — `currentTime` keeps advancing with
   `document.visibilityState === "hidden"` — but a fresh navigation performed
   while unmapped initializes nothing, and Goosic navigates this WebView on
@@ -1244,7 +1278,7 @@ requests. WKWebView historically treated loopback as potentially trustworthy,
 but newer macOS/WebKit builds can withhold the same request behind
 private-network policy. Chromium remains on the loopback route.
 
-The symptom is not a silent failure: the track is *audible* while React never
+The symptom is not a silent failure: the track is _audible_ while React never
 receives `ready`, so the 12-second startup timer in `audio-engine.ts` fires,
 `failWebPlayback` recreates the WebPlayer and restarts the same song, and the
 second timeout surfaces "Official player startup timed out."
@@ -1344,7 +1378,7 @@ These were present and non-blocking at the `v0.3.6` release:
   warn. Updater artifacts are separately signed with Tauri's signing key.
 - On Linux the console prints two harmless third-party messages that are not
   Goosic's and are not playback failures. `libayatana-appindicator is
-  deprecated` comes from the library itself, pulled in by Tauri's `tray-icon`
+deprecated` comes from the library itself, pulled in by Tauri's `tray-icon`
   feature. Bursts of `gst_value_collect_int_range: assertion ... failed` /
   `range start is not smaller than end` come from `WebKitWebProcess` building a
   degenerate `GstIntRange` (min >= max) while enumerating codecs; GStreamer
@@ -1416,6 +1450,11 @@ persisted and synchronized across native windows.
 
 ## 18. Recent release history
 
+- **`v0.6.0`** — tunes Windows Liquid Glass to the macOS reference: Clear uses
+  1px frost, all Windows glass surfaces share round K=1 corners and matching
+  SVG maps, and the thin directional specular rim remains visible after
+  refraction and material compositing.
+
 - **`v0.5.3`** â€” moves WKWebView observer envelopes
   from blocked network fetches to an origin-checked native script-message
   handler. This fixes audio playing while readiness/timeline events are absent,
@@ -1486,8 +1525,8 @@ At the time this document was last refreshed:
   manifest or an explicit Storage selection through the cache-only local proxy.
   Existing downloads remain intact and visible; invalid/legacy entries are
   marked for repair or explicit
-  deletion instead of being silently removed. The app version remains `0.4.7`
-  until an explicit release is prepared.
+  deletion instead of being silently removed. The working tree version is
+  `0.6.0` until this release is explicitly prepared and published.
 - `v0.4.6` is public with Windows, Linux, and universal macOS artifacts. It
   adds shared sidebar glass, Default/Modern bottom-player layouts, global glass
   material controls, native drag prevention, and lower WebView2 memory use.

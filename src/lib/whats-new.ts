@@ -38,6 +38,27 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.6.0",
+    date: "August 2026",
+    sections: [
+      {
+        heading: "Glass, tuned closer to macOS",
+        items: [
+          "Clear glass now uses a light 1px frost, keeping the artwork and colours behind it visible instead of washing them out.",
+          "The player, sidebar, menus, dialogs, and title-bar controls now share the same round capsule and continuous-corner treatment on Windows.",
+          "The edge highlight is a thin directional specular rim again, with the refraction and highlight maps following each surface's actual rounded shape.",
+        ],
+      },
+      {
+        heading: "More consistent materials",
+        items: [
+          "Regular and Subdued glass keep their calibrated Figma paints, saturation, and frost while using the same compositing path everywhere.",
+          "Glass no longer grows duplicate bars or opaque gradient blocks outside the surface when a player or large panel is resized.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.5.9",
     date: "August 2026",
     sections: [

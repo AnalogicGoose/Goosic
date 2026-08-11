@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getVisualTheme, isVisualThemeId, VISUAL_THEMES } from "@/lib/themes";
+import {
+  getVisualTheme,
+  isVisualThemeId,
+  VISUAL_THEMES,
+  webGlassMaterialTokens,
+} from "@/lib/themes";
 
 describe("visual theme registry", () => {
   it("keeps every child theme on the shared semantic/material contract", () => {
@@ -27,5 +32,27 @@ describe("visual theme registry", () => {
     expect(isVisualThemeId("ocean")).toBe(false);
     expect(isVisualThemeId("not-a-theme")).toBe(false);
     expect(getVisualTheme("not-a-theme" as never).id).toBe("default");
+  });
+});
+
+describe("Windows glass material calibration", () => {
+  it("keeps Clear nearly transparent at 1px frost", () => {
+    expect(webGlassMaterialTokens("glass-clear")).toEqual({
+      frost: 1,
+      luminosity: 6,
+      shade: 0,
+      saturation: 1.1,
+      refraction: true,
+    });
+  });
+
+  it("keeps Subdued aligned with the native 2560x1440 reference", () => {
+    expect(webGlassMaterialTokens("glass-subdued")).toEqual({
+      frost: 14,
+      luminosity: 2,
+      shade: 22,
+      saturation: 1.2,
+      refraction: true,
+    });
   });
 });

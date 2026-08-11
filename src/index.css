@@ -77,6 +77,21 @@
   border-color: transparent;
 }
 
+/* Unlayered so Tailwind radius utilities cannot override the Figma geometry.
+   Small controls retain their component-specific pill/circle radius. */
+html.liquid-refract .glass-material:not(.glass-material-small) {
+  border-radius: 32px !important;
+}
+html.liquid-refract
+  .glass-material.liquid-glass-player:not(.glass-material-small) {
+  border-radius: 9999px !important;
+  corner-shape: round;
+}
+html.liquid-refract .liquid-glass-player::before,
+html.liquid-refract .liquid-glass-player::after {
+  corner-shape: round;
+}
+
 .native-player-material {
   background: transparent;
   border-color: transparent;
@@ -342,6 +357,16 @@ html body [data-slot="sidebar-container"] {
     background: transparent;
     box-shadow: none;
   }
+
+  /* The native macOS controls read as circularly rounded capsules at this
+     scale. Keep the whole Windows UI at the round K=1 endpoint so toolbars,
+     sidebars, menus, dialogs, controls, and their glass maps share that same
+     silhouette. */
+  .liquid-refract *,
+  .liquid-refract *::before,
+  .liquid-refract *::after {
+    corner-shape: round;
+  }
   .glass-material-small {
     /* Figma small/regular Glass radii are 6/16. Scale the user preference so
        the shared blur control preserves that exact ratio. */
@@ -357,9 +382,9 @@ html body [data-slot="sidebar-container"] {
     content: "";
   }
 
-  /* CSS only provides geometry. The visual material is supplied by the SVG
-     glass filter; keeping these layers transparent prevents duplicate CSS
-     borders, highlights, gradients, and shadows. */
+  /* The SVG filter owns the interactive material, including the two Figma
+     frame paints. Keeping these geometry layers transparent avoids turning
+     Plus Lighter into an opaque #101010 fill in WebView2's isolated stack. */
   .glass-material-interactive::before {
     background: transparent;
     box-shadow: none;
@@ -369,36 +394,17 @@ html body [data-slot="sidebar-container"] {
   /* Active=True, front layer: Glass Effect. The neutral white multiply fill
      is visually identity in CSS; the two dark inner rims are literal. Small
      controls add Figma's third #e6e6e6 highlight. Pointer variables supply
-     the interaction light without changing any of the Figma effect values.
-
-     The one paint this layer does own is the luminosity fill. Refracting and
-     frosting the backdrop can only ever be as bright as what is behind the
-     panel, so over a dark app a pure-optics material renders as a dark hole —
-     while macOS renders a panel visibly lighter than its surroundings, which
-     is what keeps its menu labels legible over any wallpaper. Apple's material
-     is emissive, not just transmissive, and this is that term. */
-     The Classic family needs the opposite term as well: those materials dim
-     and neutralize the backdrop rather than lifting it, and by Thick/Chrome
-     they are closer to smoked perspex than to glass. Both layers are painted
-     unconditionally and the material tokens zero whichever one does not
-     apply. */
+     the interaction light without changing any of the Figma effect values. */
   .glass-material-interactive::after {
-    background:
-      linear-gradient(
-        0deg,
-        rgb(0 0 0 / var(--glass-shade, 0%)) 0 100%
-      ),
-      linear-gradient(
-        0deg,
-        rgb(255 255 255 / var(--glass-luminosity, 14%)) 0 100%
-      );
+    background: transparent;
     box-shadow: none;
   }
 
   /* Active=False is not an interactive filter with a feature disabled. It is
      a separate Figma construction: Shadow (back) -> Fill (front), and has no
      backdrop filter, refraction, dispersion, or dynamic lighting. */
-  .glass-material-static::before {
+  .glass-material-static::before,
+  [data-glass-material^="blur-"] .glass-material-interactive::before {
     background: transparent;
     mix-blend-mode: normal;
     box-shadow: none;
@@ -408,26 +414,20 @@ html body [data-slot="sidebar-container"] {
     mix-blend-mode: normal;
   }
 
-  /* Shared glass rim: a 1px directional reflector on the supplied Figma
-     gradient, plus a continuous base so the edge never disappears entirely.
-     The Figma gradient alone drops to zero across the middle two stops, which
-     leaves the left and bottom edges unlit — macOS lights the whole perimeter
-     and merely biases it toward the top-left. The bias is what reads as a
-     light source; a rim that vanishes on two sides reads as a missing edge.
-     This matters most on the lightest materials: with Clear's 4px frost the
-     rim is nearly all that says a surface is there at all. */
-  .glass-material::before {
+  /* The v0.5.8 static material keeps its CSS reflector. Interactive surfaces
+     now receive the same directional light from their dedicated SVG specular
+     map, so they must not stack this outline over the curved highlight. */
+  .glass-material-static::before,
+  [data-glass-material^="blur-"] .glass-material-interactive::before {
     inset: 0;
     padding: 1.4px;
-    background:
-      linear-gradient(
-        157deg,
-        rgb(255 255 255 / 45%) 2.12%,
-        rgb(255 255 255 / 0%) 39%,
-        rgb(255 255 255 / 0%) 54.33%,
-        rgb(255 255 255 / 14%) 93.02%
-      ),
-      linear-gradient(0deg, rgb(255 255 255 / 10%) 0 100%);
+    background: linear-gradient(
+      157deg,
+      rgb(255 255 255 / 40%) 2.12%,
+      rgb(255 255 255 / 0%) 39%,
+      rgb(255 255 255 / 0%) 54.33%,
+      rgb(255 255 255 / 10%) 93.02%
+    );
     box-shadow: none;
     mix-blend-mode: normal;
     -webkit-mask:
@@ -471,12 +471,6 @@ html body [data-slot="sidebar-container"] {
   .glass-material-interactive {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-    /* Outer shadow. A material floats above what it covers, and the shadow is
-       how that reads — without it a light stop has no separation from the
-       content behind it and looks like a tinted region rather than a panel.
-       Kept soft and low-contrast so it does not become a dark outline on the
-       already-dark chrome. */
-    box-shadow: 0 6px 24px rgb(0 0 0 / 22%);
   }
   .liquid-refract .glass-material-interactive {
     -webkit-backdrop-filter: var(--liquid-glass-filter, none);
@@ -516,22 +510,14 @@ html body [data-slot="sidebar-container"] {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
       background: transparent;
-      /* Same reasoning as the rim and the fill: the system material draws its
-         own shadow, so ours would stack a second one under it. */
-      box-shadow: none;
     }
     /* The system material draws its own rim and specular highlight, so the
        Figma reflector would read as a second, brighter edge stacked on it. */
     .macos-backdrop-glass
-      .glass-material-interactive:not(.native-player-material)::before {
-      content: none;
-    }
-    /* Same reasoning for the luminosity fill: the system material is already
-       emissive, so the CSS term that stands in for it elsewhere would only
-       wash this one out. */
+      .glass-material-interactive:not(.native-player-material)::before,
     .macos-backdrop-glass
       .glass-material-interactive:not(.native-player-material)::after {
-      background: none;
+      content: none;
     }
     [data-glass-material="blur-ultra-thin"]
       .glass-material-interactive:not(.native-player-material) {

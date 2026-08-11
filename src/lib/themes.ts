@@ -274,24 +274,24 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
   // that was consistently too heavy here; do not raise it to make a stop read
   // as "more material", use shade for that, which is what Apple does.
   "glass-clear": {
-    frost: 4,
+    frost: 1,
     luminosity: 6,
     shade: 0,
     saturation: 1.1,
     refraction: true,
   },
   "glass-regular": {
-    frost: 12,
+    frost: 5,
     luminosity: 10,
     shade: 0,
-    saturation: 1.3,
+    saturation: 1.35,
     refraction: true,
   },
   "glass-subdued": {
-    frost: 18,
-    luminosity: 5,
-    shade: 16,
-    saturation: 1.1,
+    frost: 14,
+    luminosity: 2,
+    shade: 22,
+    saturation: 1.2,
     refraction: true,
   },
   // The Classic stops are frosted panes: heavy blur, an opacity tint, no lens.
