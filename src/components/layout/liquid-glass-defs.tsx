@@ -92,10 +92,9 @@ export type GlassRendererVariant =
   | "R1"
   | "R2"
   | "R3"
-  | "S0"
-  | "S1"
-  | "S2"
-  | "S3";
+  | "E1"
+  | "E2"
+  | "E3";
 
 type GlassVariantConfig = {
   colorSpace: GlassColorSpaceMode;
@@ -149,21 +148,26 @@ type GlassVariantConfig = {
    */
   lowResBlock: number;
   /**
-   * Sampling reduction for the *refraction* source, as a block size in CSS px.
-   * 0 leaves it on the pre-blurred full-resolution backdrop.
+   * Backdrop-derived edge caustic, 0-100. 0 disables the pass.
    *
-   * Deliberately separate from `lowResBlock`. The two branches want different
-   * frequency bands: contamination wants only broad colour and luminance, while
-   * refraction has to keep recognisable album structure so there is something
-   * for the lens to visibly bend. One sample cannot serve both — coarse enough
-   * to be smoky destroys the shapes, fine enough to keep shapes is not smoky.
+   * The existing specular rim is geometry and light driven — a fixed -101°
+   * source against the SDF normal — so it is the same white glint whatever sits
+   * behind the glass. Native macOS shows something additional: sections of the
+   * boundary pick up colour from whatever backdrop lies behind *that* stretch
+   * of edge, as though the rim were concentrating refracted light. This pass
+   * supplies that, and is deliberately separate so the white specular survives
+   * as its own lighting component.
    */
-  refractionResBlock: number;
+  edgeCaustic: number;
   /**
-   * Reconstruction blur after that reduction, as a multiple of its block size.
-   * Higher softens object boundaries further without losing their placement.
+   * How tightly the caustic hugs the boundary. Higher is narrower.
+   *
+   * Applied as a gamma exponent to the same displacement-deviation the bezel
+   * mask uses, so no new geometry: deviation peaks at the extreme edge, and
+   * raising the exponent concentrates the pass there. The target is refracted
+   * light caught in the boundary, not an outer glow.
    */
-  refractionRecon: number;
+  edgeCausticWidth: number;
 };
 
 /** Every variant inherits these and overrides what it is testing. */
@@ -177,8 +181,8 @@ const GLASS_VARIANT_BASE = {
   lumaBlur: 48,
   lumaMode: "luminosity",
   lowResBlock: 0,
-  refractionResBlock: 0,
-  refractionRecon: 0.5,
+  edgeCaustic: 0,
+  edgeCausticWidth: 3,
 } as const satisfies GlassVariantConfig;
 
 const GLASS_VARIANTS: Record<GlassRendererVariant, GlassVariantConfig> = {
@@ -207,21 +211,11 @@ const GLASS_VARIANTS: Record<GlassRendererVariant, GlassVariantConfig> = {
   R1: { ...GLASS_VARIANT_BASE, lowResBlock: 4, wash: 18, luma: 18, lumaBlur: 12 },
   R2: { ...GLASS_VARIANT_BASE, lowResBlock: 8, wash: 18, luma: 18, lumaBlur: 12 },
   R3: { ...GLASS_VARIANT_BASE, lowResBlock: 16, wash: 18, luma: 18, lumaBlur: 12 },
-  // Structural refraction sweep. Contamination is off in S0-S2 so the only
-  // variable is what the lens is bending; S3 adds the coarse branch back on
-  // top of the winner.
-  S0: { ...GLASS_VARIANT_BASE },
-  S1: { ...GLASS_VARIANT_BASE, refractionResBlock: 4, refractionRecon: 0.5 },
-  S2: { ...GLASS_VARIANT_BASE, refractionResBlock: 4, refractionRecon: 1 },
-  S3: {
-    ...GLASS_VARIANT_BASE,
-    refractionResBlock: 4,
-    refractionRecon: 0.5,
-    lowResBlock: 16,
-    wash: 18,
-    luma: 18,
-    lumaBlur: 12,
-  },
+  // Edge-caustic sweep over R3. Only the caustic differs between these and R3,
+  // so anything that changes is backdrop-derived rim colour and nothing else.
+  E1: { ...GLASS_VARIANT_BASE, lowResBlock: 16, wash: 18, luma: 18, lumaBlur: 12, edgeCaustic: 25, edgeCausticWidth: 3 },
+  E2: { ...GLASS_VARIANT_BASE, lowResBlock: 16, wash: 18, luma: 18, lumaBlur: 12, edgeCaustic: 45, edgeCausticWidth: 3 },
+  E3: { ...GLASS_VARIANT_BASE, lowResBlock: 16, wash: 18, luma: 18, lumaBlur: 12, edgeCaustic: 45, edgeCausticWidth: 6 },
 };
 
 
@@ -234,7 +228,7 @@ const GLASS_VARIANTS: Record<GlassRendererVariant, GlassVariantConfig> = {
  * half the frost radius. A remains reachable as `?glass=A` for regression
  * checks against the original serial path.
  */
-const GLASS_VARIANT_DEFAULT: GlassRendererVariant = "D2";
+const GLASS_VARIANT_DEFAULT: GlassRendererVariant = "R3";
 
 const GLASS_VARIANT_KEY = "goosic:glass-variant";
 
@@ -327,14 +321,21 @@ export const GLASS_LOW_RES_BLOCK: number = devNumber(
   "lowRes",
   GLASS_VARIANTS[GLASS_RENDERER_VARIANT].lowResBlock,
 );
-export const GLASS_REFRACTION_RES_BLOCK: number = devNumber(
-  "refRes",
-  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].refractionResBlock,
+export const GLASS_EDGE_CAUSTIC_STRENGTH: number = devNumber(
+  "caustic",
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].edgeCaustic,
 );
-export const GLASS_REFRACTION_RECON: number = devNumber(
-  "refRecon",
-  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].refractionRecon,
+export const GLASS_EDGE_CAUSTIC_WIDTH: number = devNumber(
+  "causticWidth",
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].edgeCausticWidth,
 );
+/**
+ * Chroma boost applied to the caustic before it reaches the rim, so a coloured
+ * object crossing the boundary reads as colour rather than a brightness bump.
+ * EXPERIMENTAL — not an Apple/Figma value.
+ */
+export const GLASS_EDGE_CAUSTIC_SATURATION = 1.8;
+
 export const GLASS_LUMA_WASH_MODE: "normal" | "luminosity" | "soft-light" =
   (() => {
     const raw = devParam("lumaMode");
@@ -346,7 +347,7 @@ export const GLASS_LUMA_WASH_MODE: "normal" | "luminosity" | "soft-light" =
 if (import.meta.env.DEV && typeof window !== "undefined") {
   // Printed so a screenshot can always be traced back to a configuration.
   console.info(
-    `[glass] variant ${GLASS_RENDERER_VARIANT} — space ${GLASS_COLOR_SPACE_MODE}, bezel ${GLASS_BEZEL_REFRACTION}, pre-blur ${GLASS_REFRACTION_PREBLUR_RATIO}x frost, colour wash ${GLASS_COLOR_WASH_STRENGTH}@${GLASS_COLOR_WASH_BLUR}px, luma wash ${GLASS_LUMA_WASH_STRENGTH}@${GLASS_LUMA_WASH_BLUR}px (${GLASS_LUMA_WASH_MODE}), low-res block ${GLASS_LOW_RES_BLOCK}, refraction block ${GLASS_REFRACTION_RES_BLOCK}@${GLASS_REFRACTION_RECON}x`,
+    `[glass] variant ${GLASS_RENDERER_VARIANT} — space ${GLASS_COLOR_SPACE_MODE}, bezel ${GLASS_BEZEL_REFRACTION}, pre-blur ${GLASS_REFRACTION_PREBLUR_RATIO}x frost, colour wash ${GLASS_COLOR_WASH_STRENGTH}@${GLASS_COLOR_WASH_BLUR}px, luma wash ${GLASS_LUMA_WASH_STRENGTH}@${GLASS_LUMA_WASH_BLUR}px (${GLASS_LUMA_WASH_MODE}), low-res block ${GLASS_LOW_RES_BLOCK}, caustic ${GLASS_EDGE_CAUSTIC_STRENGTH}@w${GLASS_EDGE_CAUSTIC_WIDTH}`,
   );
 }
 
@@ -859,49 +860,10 @@ function appendFilter(
   // (saturation matched so only sharpness differs between the branches).
   const refractionSource = GLASS_BEZEL_REFRACTION ? "raw_source" : "blurred_source";
   if (GLASS_BEZEL_REFRACTION) {
-    // The structural optical sample. It has to sit between the frost body and
-    // the raw backdrop: enough of the artwork's large shapes survive for the
-    // lens to visibly bend something recognisable, without exposing sharp text
-    // or texture. Two independent controls get it there — an optional sampling
-    // reduction that removes the highest frequencies outright, and a light
-    // low-pass that softens what remains.
+    // A light low-pass ahead of the lens: raw reads as a sharp copy of the
+    // background pasted into the bezel, so the branch is softened just enough
+    // to belong to the same material.
     let refractionInput = "SourceGraphic";
-
-    if (GLASS_REFRACTION_RES_BLOCK > 0) {
-      // Its own reduction, at a finer block than the contamination branch: that
-      // one is tuned to destroy structure, this one has to preserve it.
-      const structuralMap = svgElement("feImage");
-      setAttributes(structuralMap, {
-        href: getQuantiseMap(width, height, GLASS_REFRACTION_RES_BLOCK),
-        x: 0,
-        y: 0,
-        width,
-        height,
-        preserveAspectRatio: "none",
-        result: "structural_map",
-      });
-      const structuralQuantised = svgElement("feDisplacementMap");
-      setAttributes(structuralQuantised, {
-        in: "SourceGraphic",
-        in2: "structural_map",
-        scale: GLASS_REFRACTION_RES_BLOCK,
-        xChannelSelector: "R",
-        yChannelSelector: "G",
-        result: "structural_quantised",
-      });
-      const structuralRecon = svgElement("feGaussianBlur");
-      setAttributes(structuralRecon, {
-        in: "structural_quantised",
-        stdDeviation: Math.max(
-          0.5,
-          GLASS_REFRACTION_RES_BLOCK * GLASS_REFRACTION_RECON,
-        ),
-        "color-interpolation-filters": frostSpace,
-        result: "structural_source",
-      });
-      filter.append(structuralMap, structuralQuantised, structuralRecon);
-      refractionInput = "structural_source";
-    }
 
     const preBlurAmount = blurLevel * GLASS_REFRACTION_PREBLUR_RATIO;
     if (preBlurAmount > 0) {
@@ -1405,9 +1367,75 @@ function appendFilter(
     paintedResult = "with_grain";
   }
 
+  if (GLASS_EDGE_CAUSTIC_STRENGTH > 0 && GLASS_BEZEL_REFRACTION) {
+    // Backdrop-derived rim colour. The white specular above is geometry and
+    // light driven, so it never changes with what is behind the glass; this
+    // takes the already displaced backdrop and keeps only the sliver of it
+    // sitting in the boundary, so a red object crossing behind the edge lights
+    // that stretch of rim red and a blue one lights it blue.
+    //
+    // The mask is the same displacement deviation the bezel weight comes from,
+    // raised to a high exponent. Deviation peaks at the extreme edge, so the
+    // exponent concentrates the pass into the boundary rather than letting it
+    // spread inward as a glow. No new geometry, no second map.
+    const causticShape = svgElement("feComponentTransfer");
+    setAttributes(causticShape, { in: "bezel_alpha", result: "caustic_mask" });
+    const causticShapeFunc = svgElement("feFuncA");
+    setAttributes(causticShapeFunc, {
+      type: "gamma",
+      amplitude: 1,
+      exponent: GLASS_EDGE_CAUSTIC_WIDTH,
+      offset: 0,
+    });
+    causticShape.append(causticShapeFunc);
+
+    const causticSample = svgElement("feComposite");
+    setAttributes(causticSample, {
+      in: "refracted",
+      in2: "caustic_mask",
+      operator: "in",
+      result: "caustic_sample",
+    });
+    // Boosted so a coloured object reads as colour in the rim rather than as a
+    // brightness bump, which is what an unsaturated sample degenerates into.
+    const causticChroma = svgElement("feColorMatrix");
+    setAttributes(causticChroma, {
+      in: "caustic_sample",
+      type: "saturate",
+      values: GLASS_EDGE_CAUSTIC_SATURATION,
+      result: "caustic_chroma",
+    });
+    const causticStrength = svgElement("feComponentTransfer");
+    setAttributes(causticStrength, { in: "caustic_chroma", result: "caustic" });
+    const causticAlpha = svgElement("feFuncA");
+    setAttributes(causticAlpha, {
+      type: "linear",
+      slope: GLASS_EDGE_CAUSTIC_STRENGTH / 100,
+    });
+    causticStrength.append(causticAlpha);
+    // `screen` so the rim gains light rather than being painted over — caught
+    // light adds, it does not replace the surface underneath.
+    const withCaustic = svgElement("feBlend");
+    setAttributes(withCaustic, {
+      in: "caustic",
+      in2: paintedResult,
+      mode: "screen",
+      result: "with_caustic",
+    });
+    primitives.push(
+      causticShape,
+      causticSample,
+      causticChroma,
+      causticStrength,
+      withCaustic,
+    );
+    paintedResult = "with_caustic";
+  }
+
   // Specular is the final optical layer. Putting material paints after this
   // rim suppresses it on Windows, while Apple's material keeps the highlight
-  // visibly above its tint and luminosity layers.
+  // visibly above its tint and luminosity layers. The caustic sits below it so
+  // the white glint stays readable on top of the coloured rim.
   const withSpecular = svgElement("feBlend");
   setAttributes(withSpecular, {
     in: "specular_faded",
@@ -1512,7 +1540,7 @@ export function LiquidGlassDefs() {
       const lensKey = material.lens
         ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
         : "none";
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}w${GLASS_COLOR_WASH_STRENGTH}-${GLASS_COLOR_WASH_BLUR}m${GLASS_LUMA_WASH_STRENGTH}-${GLASS_LUMA_WASH_BLUR}-${GLASS_LUMA_WASH_MODE}q${GLASS_LOW_RES_BLOCK}s${GLASS_REFRACTION_RES_BLOCK}-${GLASS_REFRACTION_RECON}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}w${GLASS_COLOR_WASH_STRENGTH}-${GLASS_COLOR_WASH_BLUR}m${GLASS_LUMA_WASH_STRENGTH}-${GLASS_LUMA_WASH_BLUR}-${GLASS_LUMA_WASH_MODE}q${GLASS_LOW_RES_BLOCK}e${GLASS_EDGE_CAUSTIC_STRENGTH}-${GLASS_EDGE_CAUSTIC_WIDTH}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 
