@@ -42,6 +42,7 @@ describe("Windows glass material calibration", () => {
       luminosity: 3,
       shade: 0,
       saturation: 1.1,
+      grain: 8,
       lens: { refraction: 30, depth: 20, dispersion: 20, splay: 20 },
     });
   });
@@ -52,6 +53,7 @@ describe("Windows glass material calibration", () => {
       luminosity: 2,
       shade: 22,
       saturation: 1.2,
+      grain: 6,
       lens: { refraction: 70, depth: 30, dispersion: 20, splay: 20 },
     });
   });

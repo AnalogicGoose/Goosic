@@ -375,6 +375,7 @@ function appendFilter(
   materialLuminosity: number,
   materialShade: number,
   lens: GlassLensTokens,
+  grain: number,
 ): void {
   const filter = svgElement("filter");
   setAttributes(filter, {
@@ -657,6 +658,47 @@ function appendFilter(
     paintedResult = "with_material_paints";
   }
 
+  if (grain > 0) {
+    // The surface texture, composited over the finished material but under the
+    // specular rim — the highlight is a reflection off the pane, so it sits on
+    // top of the grain rather than being roughened by it.
+    //
+    // fractalNoise rather than turbulence: it is the smoother, more even of the
+    // two, which is what reads as ground glass instead of static. The noise is
+    // desaturated first, or its RGB channels show as colour speckle, and its
+    // alpha carries the strength so the blend stays a texture rather than a
+    // grey wash.
+    const grainNoise = svgElement("feTurbulence");
+    setAttributes(grainNoise, {
+      type: "fractalNoise",
+      baseFrequency: 0.8,
+      numOctaves: 3,
+      stitchTiles: "stitch",
+      result: "grain_noise",
+    });
+    const grainMono = svgElement("feColorMatrix");
+    setAttributes(grainMono, {
+      in: "grain_noise",
+      type: "saturate",
+      values: 0,
+      result: "grain_mono",
+    });
+    const grainStrength = svgElement("feComponentTransfer");
+    setAttributes(grainStrength, { in: "grain_mono", result: "grain" });
+    const grainAlpha = svgElement("feFuncA");
+    setAttributes(grainAlpha, { type: "linear", slope: grain / 100 });
+    grainStrength.append(grainAlpha);
+    const withGrain = svgElement("feBlend");
+    setAttributes(withGrain, {
+      in: "grain",
+      in2: paintedResult,
+      mode: "overlay",
+      result: "with_grain",
+    });
+    primitives.push(grainNoise, grainMono, grainStrength, withGrain);
+    paintedResult = "with_grain";
+  }
+
   // Specular is the final optical layer. Putting material paints after this
   // rim suppresses it on Windows, while Apple's material keeps the highlight
   // visibly above its tint and luminosity layers.
@@ -764,7 +806,7 @@ export function LiquidGlassDefs() {
       const lensKey = material.lens
         ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
         : "none";
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}`;
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 
@@ -817,6 +859,7 @@ export function LiquidGlassDefs() {
         material.luminosity,
         material.shade,
         lens,
+        material.grain,
       );
       const filterValue = `url("#${id}")`;
       element.style.setProperty("--liquid-glass-filter", filterValue);

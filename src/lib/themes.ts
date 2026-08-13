@@ -249,6 +249,20 @@ export type WebGlassMaterialTokens = {
   /** Backdrop saturation multiplier. Above 1 for glass, below 1 for Classic. */
   saturation: number;
   /**
+   * Surface grain, 0-100.
+   *
+   * The axis a synthesized blur has no way to reach otherwise. Apple's
+   * materials are not optically clean: a fine noise sits on the surface, so
+   * light lands on it unevenly and it reads as a physical pane. Chromium's
+   * `backdrop-filter: blur()` is mathematically smooth by comparison, which is
+   * what makes it look like plastic rather than glass however carefully the
+   * blur, tint and saturation are matched.
+   *
+   * Only the refractive stops can carry it — the Classic family resolves to a
+   * plain CSS filter with no SVG stage to composite noise into.
+   */
+  grain: number;
+  /**
    * The edge lens this material bends light with, or `null` when it has none.
    *
    * Only the Liquid Glass family bends light. The Classic materials are
@@ -296,10 +310,11 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 3,
     shade: 0,
     saturation: 1.1,
+    grain: 8,
     lens: { refraction: 30, depth: 20, dispersion: 20, splay: 20 },
   },
   "glass-regular": {
-    frost: 2,
+    frost: 5,
     // Measured 42,42,42 on Windows against 39,39,39 on macOS. Shade is a plain
     // black composite, so 42 * (1 - 0.07) ~= 39. The player bar reads lighter
     // than the sidebar for the same reason it always did — a brighter backdrop
@@ -311,13 +326,15 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     // stops: Regular bends the backdrop, Clear barely disturbs it. These are
     // the original Figma optics; Clear now carries its own tuned set instead of
     // both sharing one global preset.
-    lens: { refraction: 70, depth: 30, dispersion: 20, splay: 20 },
+    grain: 10,
+    lens: { refraction: 30, depth: 20, dispersion: 20, splay: 20 },
   },
   "glass-subdued": {
     frost: 14,
     luminosity: 2,
     shade: 22,
     saturation: 1.2,
+    grain: 6,
     lens: { refraction: 70, depth: 30, dispersion: 20, splay: 20 },
   },
   // The Classic stops are frosted panes: heavy blur, an opacity tint, no lens.
@@ -328,6 +345,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 4,
     shade: 12,
     saturation: 1.1,
+    grain: 0,
     lens: null,
   },
   "blur-thin": {
@@ -335,6 +353,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 4,
     shade: 20,
     saturation: 0.95,
+    grain: 0,
     lens: null,
   },
   "blur-regular": {
@@ -342,6 +361,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 3,
     shade: 30,
     saturation: 0.8,
+    grain: 0,
     lens: null,
   },
   "blur-thick": {
@@ -349,6 +369,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 3,
     shade: 42,
     saturation: 0.6,
+    grain: 0,
     lens: null,
   },
   "blur-chrome": {
@@ -356,6 +377,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 5,
     shade: 38,
     saturation: 0.45,
+    grain: 0,
     lens: null,
   },
 };
