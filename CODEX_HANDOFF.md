@@ -3,7 +3,7 @@
 > **Read this file first in every new Codex session.** It is the durable product,
 > engineering, UI, release, and troubleshooting context for this repository.
 >
-> Last verified: **2026-08-07**
+> Last verified: **2026-08-13**
 > Current app version: **0.6.0**
 > Current release candidate: **v0.6.0 macOS-accurate glass material**
 > Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.5.8>
@@ -1554,5 +1554,213 @@ At the time this document was last refreshed:
   is removed from persisted settings during migration. Future styles should
   be added as registry children rather than copied component CSS.
 
+- An unpushed branch, `glass/shell-layout-and-playback-fixes`, carries the
+  flush macOS-style sidebar, the carousel bleed, the title-bar teardown, the
+  Search landing state and live suggestions, the between-tracks audio fix, and
+  the per-material glass token system. **Section 20 documents it in full** and
+  is the place to start for anything touching glass, the shell layout, or
+  Windows/macOS material parity.
+
 When this snapshot becomes stale, update this section, the header version, and
 the recent release history as part of the next release.
+
+## 20. Branch `glass/shell-layout-and-playback-fixes` (2026-08-13)
+
+Seventeen commits, **not pushed**, branched from `main` at `05670ab`. `tsc`,
+`cargo test` (57) and the glass/theme suites are green. Everything below is
+verified in-app unless explicitly marked otherwise.
+
+### 20.1 Build and dev environment
+
+The machine is a 16 GB MacBook Air that stalled during development. The cause
+was the concurrent peak, not total memory: cargo defaults to one rustc per
+logical core (10 here), each holding several hundred MB.
+
+- `profile.dev` builds with line tables only and dependencies with no
+  debuginfo. **`target/debug` went from 25G to 2.3G**; a cold build is ~47s.
+- `build.jobs = 6` caps concurrent rustc.
+- **`.cargo/config.toml` lives at the repo root, not under `src-tauri/`.** Cargo
+  discovers config by walking up from the _working directory_, never from
+  `--manifest-path`. Under `src-tauri/` it was silently ignored by every
+  `cargo … --manifest-path src-tauri/Cargo.toml` run from the root — it looked
+  configured and was inert. Verified from both directories by temporarily
+  setting `jobs = 0`, which cargo rejects.
+- `src-tauri/scripts/dev-sign-macos.sh` is a cargo `runner` that re-signs each
+  debug build with a stable identity, so the login Keychain's "Always Allow"
+  survives rebuilds. Ad-hoc signatures are a hash of the binary, so every
+  rebuild is a new code identity and the ACL is invalidated. It auto-detects the
+  first code-signing identity, honours `GOOSIC_DEV_SIGN_IDENTITY`, and no-ops
+  where neither exists (CI included).
+- `secure_store.rs` caches the macOS Keychain key per process. It was read on
+  every `encrypt` _and_ `decrypt` — one authorization prompt per cookie-jar
+  operation. The lock is held across the Keychain round trip deliberately:
+  `spawn_blocking` callers can land concurrently and would otherwise each
+  generate a key and race to store one.
+
+### 20.2 Playback: the between-tracks audio leak
+
+Symptom: on Windows a track ends, YouTube's own autoplay pick is audible for
+about a second, then Goosic's queue advances. On macOS the same window shows up
+as the finished song briefly restarting.
+
+Cause: the guard overrode `HTMLMediaElement.prototype.play`, which only fires
+when _script_ calls `play()`. YouTube Music is a SPA — it swaps the source on an
+already-playing element, and the engine can begin autoplay with no script call.
+In both cases the override never runs. The fix is a capture-phase `play`
+**event** listener on `document`, which fires however playback began and also
+covers elements created after injection.
+
+Worst on Windows because the bridge there is loopback HTTP, the slowest of the
+three transports; macOS uses a script message handler, Linux a custom scheme.
+
+`sozercan/kaset` was investigated as prior art (Swift/WebKit, same architecture:
+native queue, hidden WebView as a DRM audio engine, no `list=` param, navigates
+per track). Two findings worth keeping:
+
+- It suppresses the page's pick with a capture-phase `play` listener, not a
+  prototype patch — independent confirmation of the fix above.
+- **It adopts the page's auto-advance when the pick matches its own queue's next
+  track**, only overriding on disagreement, which avoids the navigation entirely
+  in the common case. Goosic navigates every time. Implementing this needs a
+  `retarget` control action, because `requestedVideoId` is baked into the
+  document at navigation time and adopting would immediately re-trigger
+  `pageAdvancedPastRequest`. **Not implemented** — it inverts the
+  `requested == playing` invariant that guards against wrong-track playback.
+
+Goosic already has Kaset's double-advance protection, expressed per generation
+(`handledWebEndedGenerationRef`, `handledFailureGenerationRef`) with backends
+mutually exclusive via `store.backend`. No extra claim token is needed.
+
+### 20.3 Shell and visual language
+
+- **Sidebar is a flush macOS source list**: full height, meets the window edges,
+  no logo header, ~28px rows with 13px labels, larger avatar on the account row
+  with Premium as a dot rather than a pill. This deliberately walks back the
+  v0.6.0 floating card.
+- **Carousels bleed under the panels.** shadcn reserves a `sidebar-gap` spacer;
+  collapsing it lets the content area span the window. The inset is reapplied
+  _per child_ (`--shell-inset`), never as padding on the shared column —
+  padding there pushes `<main>`'s border box to the sidebar edge and
+  `overflow-x: hidden` clips at the padding box, so carousels bled left only to
+  be cut off exactly at the glass. `.shelf-scroll` overshoots by
+  `sidebar-width + 3rem`; the matching padding holds the first card in place for
+  any value, so route gutters need not be known.
+- Absolutely positioned descendants read `--shell-inset` rather than `left-0`,
+  because their containing block is the column's _padding box_.
+- The title bar holds only a drag region. It **cannot** be deleted:
+  `decorations: false` makes the window frameless, so `data-tauri-drag-region`
+  is the only thing that can move it. It is overlaid rather than in flex flow,
+  or it leaves a 36px band of window background above the content.
+- Search lives only on the Search tab. It was briefly moved to the title bar and
+  reverted — search is a place you go, not a control that follows you. The field
+  keeps its own file (`search-field.tsx`) regardless.
+- Search gained an Apple-Music landing state (recent searches + a Browse
+  categories colour grid from YT Music's Moods & genres, which ship a real
+  per-category colour) and **live suggestions** from
+  `music/get_search_suggestions`.
+- **Typing no longer runs a search.** A debounced effect used to mirror the
+  field into the URL, re-running the route query on every pause. Enter is
+  handled explicitly rather than by implicit form submission, which needs a
+  submit button or exactly one text field and is not dependable across three
+  WebViews.
+- The bottom player bar stays docked with no track (it already had a
+  "Nothing playing" state that was never mounted). Only `bottom` changed; the
+  side card and floating window stay gated on `hasTrack`.
+
+### 20.4 Glass: the per-material token system
+
+**This is the most important section for future work.** Every axis is now a
+token in `WEB_GLASS_MATERIAL_TOKENS` (`src/lib/themes.ts`), per material, rather
+than a global constant every stop shared.
+
+| Token        | Effect                     | Mechanism                                 |
+| ------------ | -------------------------- | ----------------------------------------- |
+| `frost`      | blur radius                | `feGaussianBlur stdDeviation`             |
+| `saturation` | backdrop chroma            | `feColorMatrix type=saturate`             |
+| `lens`       | edge refraction, or `null` | drives the displacement/specular maps     |
+| `luminosity` | brightness up              | white flood, `luminosity` blend           |
+| `shade`      | brightness down            | black flood, `normal` blend               |
+| `sheen`      | white overlay              | `overlay` blend — a contrast curve        |
+| `frameTint`  | flat colour weight         | scales `k3` on the plus-lighter composite |
+| `grain`      | surface texture            | `feTurbulence fractalNoise`               |
+
+Mechanics that are not obvious and cost real time to rediscover:
+
+- **`luminosity` blend discards hue.** Changing `FIGMA_GLASS_REGULAR_PAINTS.base`
+  from `#404040` to red changes nothing visible: the blend keeps the backdrop's
+  hue/saturation and takes only the source's _luminance_, and those two colours
+  differ by 12/255. Setting it to `#ffffff` is dramatic. Only the grey axis and
+  the opacity matter there.
+- **`baseOpacity: 0.8` on that flood was the "flat grey panel" on Windows.** At
+  0.8 a luminosity blend overwrites 80% of the backdrop's tonal range with one
+  flat value — hue survives, tone does not. It applies to `glass-regular` only.
+- **`frameTint` was the one opacity term with no control.** The frame paint is
+  Plus Lighter: it _adds_ `#101010` rather than covering, and `k3` was pinned at
+  1, so every surface took a flat +16/255 lift.
+- **`grain` is the axis a synthesized blur cannot otherwise reach.** Apple's
+  materials are not optically clean; Chromium's blur is mathematically smooth,
+  which reads as plastic. `.bg-cover-noise` already did this for the ambient
+  background — the glass filter had no noise stage at all.
+- **`GLASS_FROST_COLOR_SPACE`** (`liquid-glass-defs.tsx`) switches the blur and
+  its saturation between `sRGB` and `linearRGB`. Averaging in gamma-encoded sRGB
+  averages encoded numbers rather than light, which darkens midtones and
+  desaturates; Apple composites in linear light. Map stages stay sRGB because a
+  displacement map's channels are **vectors** and gamma corrupts them. Default is
+  `sRGB`; flipping it shifts every colour calibrated against the old result.
+- The filter's own `colorInterpolationFilters` attribute was misspelled
+  (camelCase is not an SVG attribute name) and had always been inert — the
+  filter merely inherited sRGB from the parent `<svg>`. Now correct, same value.
+
+Also fixed: `parseFloat("0px") || 34` treated a legitimate zero radius as
+missing, so the flush sidebar's maps were built around the old 34px card and the
+specular outline traced a shape the surface no longer had. Visible only on
+Windows, because macOS resolves these surfaces to `-apple-visual-effect` and
+never builds the maps.
+
+**Both cache keys now include everything the filter is built from.** `geometryKey`
+gained the lens (the rasters are built from its refraction and depth, so two
+materials would otherwise collide on one cached map); the per-surface
+`registration.geometry` gained the lens, luminance pair, grain, frameTint and
+sheen. Anything omitted is a value that can change while the early-return keeps
+the old filter on screen — which is why several of these looked inert.
+
+### 20.5 Debugging traps (these cost hours)
+
+1. **HMR leaves glass surfaces unregistered.** The effect's cleanup strips every
+   surface's inline `--liquid-glass-filter` and ready flag, and after Vite
+   re-runs the module the previous tree's surfaces are not re-registered. A
+   long-lived dev tab can reach 0 filters and stay there. **Always hard-reload —
+   or open a fresh tab — before believing a glass value does nothing.** A brand
+   new tab gave 18/18 immediately where the old one gave 0/14.
+2. **`?platform=windows` reproduces the Windows renderer on any machine**
+   (`src/lib/platform.ts`, dev-only, also `?platform=macos|linux`, `auto` to
+   clear). This is how all the Windows glass work above was verified from macOS.
+   It reproduces the _renderer_, not WebView2's compositor.
+3. **Glass tokens are inert on macOS.** `-apple-visual-effect` replaces the
+   whole filter, so every value in 20.4 only ever renders on Windows/Linux.
+   Tuning them on macOS shows nothing.
+4. `getBoundingClientRect()` reports geometry, not visibility. It happily
+   reported a carousel reaching x=24 while an ancestor clipped it at x=208.
+   Walk the ancestors' `overflow` when something looks cut off.
+
+### 20.6 Open and unverified
+
+- **Not verified on Windows at all** — no Windows machine was available. The
+  audio-leak fix, the glass calibration and the clipped-menu report below all
+  need a real run.
+- **Blur/menu clipping on Windows** is unresolved. Two candidates, both on the
+  reporter's own checklist: `DialogContent` carries `translate-x-[-50%]` plus a
+  `zoom-in-95` animation _on the same element as the glass_ (Chromium samples
+  backdrop-filter in local space; a transform misaligns it), and
+  `settings-dialog.tsx` adds `overflow-hidden` to that same surface while the
+  filter region deliberately spills `blurLevel * 3` past the box. Distinguish by
+  deleting `overflow-hidden` in devtools (→ the latter) or setting
+  `transform: none` (→ the former).
+- `FIGMA_GLASS_REGULAR_PAINTS.overlay*` still exists as a global constant even
+  though `sheen` now owns the overlay stage; `base`/`baseOpacity` remain global.
+- The Kaset "adopt the page's advance" optimisation (20.2) is designed but not
+  built.
+- `useAudioEngine` is ~1,310 lines with 17 effects over 12 shared mutable refs;
+  `src-tauri/src/lib.rs` is ~4,880 lines. Both are known refactor targets. The
+  Discord/SMTC broadcast effects at the end of the hook were checked and touch
+  no shared refs, so they extract cleanly as a first slice.
