@@ -1,9 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { SearchIcon } from "lucide-react";
+import { SearchField } from "@/components/layout/search-field";
 import { isMacOSWebview } from "@/lib/platform";
-import { cn } from "@/lib/utils";
 
 // Plain-vite dev in a regular browser has no Tauri backend —
 // `getCurrentWindow()` throws on missing `__TAURI_INTERNALS__`, which
@@ -85,7 +83,7 @@ export function TopBar() {
             `data-tauri-drag-region` swallows pointer events from its children,
             so an input inside it could never be clicked or selected. */}
         <div data-tauri-drag-region className="h-full flex-1" />
-        <TopBarSearch />
+        <SearchField className="w-full max-w-md shrink" />
         <div data-tauri-drag-region className="h-full flex-1" />
 
         {!USES_NATIVE_MACOS_TITLEBAR && (
@@ -118,66 +116,6 @@ export function TopBar() {
         )}
       </header>
     </>
-  );
-}
-
-/**
- * The toolbar search field, in the place macOS apps put it. Submitting hands
- * off to /search, which owns the actual searching — history, suggestions,
- * filters and the scope toggle all stay there rather than being rebuilt in the
- * caption bar.
- *
- * Like the bar behind it, the field is nearly invisible at rest and firms up
- * on hover or focus, so it does not compete with the page for attention.
- */
-function TopBarSearch() {
-  const navigate = useNavigate();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [value, setValue] = useState("");
-
-  const submit = () => {
-    const q = value.trim();
-    if (!q) return;
-    void navigate({ to: "/search", search: { q, filter: "all" } });
-    inputRef.current?.blur();
-  };
-
-  return (
-    <form
-      className="relative w-full max-w-md shrink"
-      onSubmit={(e) => {
-        e.preventDefault();
-        submit();
-      }}
-    >
-      <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-      <input
-        ref={inputRef}
-        type="search"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        // Explicit rather than relying on a form's implicit submission: that
-        // needs either a submit button or exactly one text field, and this
-        // form has neither guaranteed across the three WebViews we ship on.
-        onKeyDown={(e) => {
-          if (e.key !== "Enter") return;
-          e.preventDefault();
-          submit();
-        }}
-        placeholder="Search"
-        aria-label="Search"
-        className={cn(
-          "h-6.5 w-full rounded-full border border-transparent bg-foreground/8 pl-8.5 pr-3 text-[13px] outline-none",
-          "placeholder:text-muted-foreground",
-          "transition-colors duration-150",
-          "hover:bg-foreground/12",
-          "focus:border-foreground/20 focus:bg-foreground/15",
-          // Safari paints its own clear affordance on type=search, which
-          // collides with the pill's right edge.
-          "[&::-webkit-search-cancel-button]:appearance-none",
-        )}
-      />
-    </form>
   );
 }
 

@@ -292,7 +292,7 @@ export function PlayerBarBottom({
             // See the classic variant below: `left` must clear the sidebar,
             // because absolute positioning resolves against the content
             // column's padding box, which starts behind the glass.
-            "absolute right-0 left-(--shell-inset) bottom-0 z-30 mr-2 mb-2 flex items-center gap-4 rounded-[999px] border px-4 py-2.5",
+            "absolute right-0 left-(--shell-inset) bottom-0 z-30 mx-2 mb-2 flex items-center gap-4 rounded-[999px] border px-4 py-2.5",
           )}
         >
           {errorBanner}
@@ -349,12 +349,11 @@ export function PlayerBarBottom({
     // repeat) and the ones from imported components (Like, Lyrics,
     // Queue, Volume, More). Matches the right-card's translucent
     // white feel.
-    // Right margin only (`mr-2` = 8px) matches the sidebar's own
-    // 8px inset from the window edges. The sidebar's `data-slot=sidebar-container`
-    // already eats 8px on its right side via shadcn's `p-2`, so a 0px
-    // left margin here lands the bar's left edge 8px away from the
-    // sidebar's visible right edge — symmetric with how the sidebar
-    // sits 8px from the window-left.
+    // Equal 8px margins on both sides (`mx-2`). The left one used to be
+    // unnecessary: the floating sidebar carried its own 8px inset via shadcn's
+    // `p-2`, so the bar already cleared its visible edge. The sidebar is flush
+    // now, ending exactly at `--shell-inset`, so without this the two surfaces
+    // touch.
     // SidebarProvider injects a nested TooltipProvider with delay=0
     // that shadows the outer slow one — wrap this surface so its
     // tooltips honor the intended 1s delay. `skipDelayDuration={0}`
@@ -370,7 +369,7 @@ export function PlayerBarBottom({
           // column's padding box, which now starts at the window edge behind
           // the sidebar. `inset-x-0` therefore ran the bar underneath the
           // sidebar (and `z-30` drew its controls back over the glass).
-          "absolute right-0 left-(--shell-inset) bottom-0 z-30 mr-2 mb-2 flex flex-col gap-2 rounded-[34px] border px-4 py-3",
+          "absolute right-0 left-(--shell-inset) bottom-0 z-30 mx-2 mb-2 flex flex-col gap-2 rounded-[34px] border px-4 py-3",
         )}
       >
         {errorBanner}
