@@ -108,6 +108,19 @@ html.liquid-refract .liquid-glass-player::after {
 html body [data-slot="sidebar-container"] {
   top: var(--titlebar-h);
   height: calc(100svh - var(--titlebar-h));
+  /* The content column is `relative z-10` and comes later in the DOM, so
+     without this the page would paint over the glass instead of sliding
+     beneath it. */
+  z-index: 20;
+}
+
+/* The sidebar is a translucent overlay, not a column. Collapsing the layout
+   gap shadcn reserves for it lets the content area span the full window, which
+   is what allows shelf carousels to bleed left underneath the glass. Nothing
+   moves on screen: the content column restores the exact same offset with
+   padding (see app-shell), so only the carousels' scroll box gets wider. */
+html body [data-slot="sidebar-gap"] {
+  width: 0;
 }
 
 /* Keep fullscreen controls in their own viewport compositor. Queue uses an
@@ -122,6 +135,37 @@ html body [data-slot="sidebar-container"] {
    23rem control boundary so they remain clickable and visually stationary. */
 .right-player-overlay .shelf-carousel-header {
   margin-right: 23rem;
+}
+
+/* The left-hand mirror of the rule above. The scroll box reaches back under
+   the sidebar while an equal padding holds the first card exactly where it
+   already sat, so cards slide beneath the glass on their way out instead of
+   stopping at its edge. Only the carousels bleed — headings, track rows and
+   page text stay in the padded column beside the sidebar. */
+.shelf-scroll {
+  /* Overshoot the sidebar rather than matching its width exactly. The shelf
+     also sits inside its route's own horizontal gutter, so an exact-width
+     bleed stops that gutter short of the window edge and leaves a strip where
+     covers are cut before they reach it. Overshooting costs nothing: the
+     matching padding holds the first card in place for any value, and <main>
+     clips the excess at the window edge. */
+  --shelf-bleed: calc(var(--sidebar-width) + 3rem);
+  margin-left: calc(-1 * var(--shelf-bleed));
+  padding-left: var(--shelf-bleed);
+}
+
+[data-slot="sidebar"][data-state="collapsed"] ~ * .shelf-scroll {
+  --shelf-bleed: calc(var(--sidebar-width-icon) + 3rem);
+}
+
+/* Trailing scroll room the width of the player card. Without it the last few
+   covers in a row sit permanently behind the card with no way to reach them —
+   the row is already scrolled to its end, so they can never be brought out and
+   clicked. The padding lets the run continue past the card, exactly as the
+   leading padding does for the sidebar. 23rem matches the header's own control
+   boundary above (the card is 22rem plus its 8px inset). */
+.right-player-overlay .shelf-scroll {
+  padding-right: 23rem;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -292,39 +336,67 @@ html body [data-slot="sidebar-container"] {
     height: calc(100svh - var(--titlebar-h));
   }
 
-  /* Thin, subtle scrollbars (used in main content area and carousels). */
-  .shelf-scroll,
+  /* A carousel's scroll box deliberately extends under the sidebar (and, in
+     right-player mode, under the player card) so covers can pass beneath the
+     glass. Its scrollbar spans that same box, so it would run underneath the
+     panels with no way to inset it — a native scrollbar cannot be shortened.
+     Carousels already expose arrows and drag-to-scroll, and Apple Music shows
+     no scrollbar on these rows either, so hide it rather than let it slide
+     behind the glass. The vertical `.app-scroll` bars are unaffected. */
+  .shelf-scroll {
+    scrollbar-width: none;
+  }
+  .shelf-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Thin, subtle scrollbars (used in the main content area). */
   .app-scroll {
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
   }
-  .shelf-scroll::-webkit-scrollbar,
   .app-scroll::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
-  .shelf-scroll::-webkit-scrollbar-track,
   .app-scroll::-webkit-scrollbar-track {
     background: transparent;
   }
-  .shelf-scroll::-webkit-scrollbar-thumb,
   .app-scroll::-webkit-scrollbar-thumb {
     background: var(--border);
     border-radius: 9999px;
   }
-  .shelf-scroll::-webkit-scrollbar-thumb:hover,
   .app-scroll::-webkit-scrollbar-thumb:hover {
     background: var(--muted-foreground);
   }
 
-  /* Menu lists reuse the app scrollbar, but keep its track away from the
-     strongly rounded top and bottom edges of the glass panel. */
+  /* Menu lists reuse the app scrollbar, but float it *inside* the glass panel
+     the way iOS does, clear of the rounded edges on all sides, instead of
+     letting it ride the rim.
+
+     Vertically: the inset has to clear the corner, not merely approach it. For
+     a radius r, a track starting `d` below the edge is still cut horizontally
+     by r - sqrt(r² - (r-d)²) — at 24px against these 34px corners that is
+     ~1.5px of an 8px bar, which shaved the thumb's rounded end. d = r is the
+     first value that clears the curve outright.
+
+     Horizontally: this is an overlay scrollbar (clientWidth === offsetWidth),
+     so it paints on the panel's very edge and reads as sitting outside the
+     frame. A native thumb cannot be positioned, only inset — a wide
+     transparent border plus `background-clip: padding-box` is what pulls the
+     visible pill inwards. The gutter stays 14px; the pill is the 4px left
+     after the borders. */
+  .menu-scroll::-webkit-scrollbar {
+    width: 14px;
+  }
+
   .menu-scroll::-webkit-scrollbar-track {
-    margin-block: 24px;
+    margin-block: 36px;
   }
 
   .menu-scroll::-webkit-scrollbar-thumb {
-    border-inline: 1px solid transparent;
+    border-right: 8px solid transparent;
+    border-left: 2px solid transparent;
     background-clip: padding-box;
   }
 
@@ -571,26 +643,33 @@ html body [data-slot="sidebar-container"] {
      properties (set inline by the carousel based on scrollLeft) — at
      the start/end we want no fade on the dead side. */
   .shelf-edge-fade {
-    /* Alpha at each edge of the mask gradient. 1 = opaque (no fade),
-       0 = fully transparent (full fade). Ramped by the carousel's
-       scroll listener so the fade fades in/out smoothly as the user
-       scrolls toward and away from each edge, instead of snapping. */
-    --fade-l: 1;
+    /* Alpha at the fading edge. 1 = opaque (no fade), 0 = fully transparent.
+       Ramped by the carousel's scroll listener so the fade eases in and out as
+       the user scrolls toward and away from the edge, instead of snapping.
+
+       There is deliberately no left ramp: the sidebar glass now occludes that
+       side, and fading covers out before they reach it reads as content
+       stopping at the panel rather than passing behind it. */
     --fade-r: 1;
     mask-image: linear-gradient(
       to right,
-      rgba(0, 0, 0, var(--fade-l)) 0,
-      black 56px,
+      black 0,
       black calc(100% - 56px),
       rgba(0, 0, 0, var(--fade-r)) 100%
     );
     -webkit-mask-image: linear-gradient(
       to right,
-      rgba(0, 0, 0, var(--fade-l)) 0,
-      black 56px,
+      black 0,
       black calc(100% - 56px),
       rgba(0, 0, 0, var(--fade-r)) 100%
     );
+  }
+
+  /* Same reasoning on the trailing edge once the right-hand player card covers
+     it: the card is the occluder, so no ramp at all. */
+  .right-player-overlay .shelf-edge-fade {
+    mask-image: none;
+    -webkit-mask-image: none;
   }
 
   /* Vertical sibling of `shelf-edge-fade` for the sidebar playlist

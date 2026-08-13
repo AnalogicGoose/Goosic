@@ -245,6 +245,25 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div
               className={cn(
                 "relative z-10 flex min-h-0 min-w-0 flex-1 flex-col",
+                // The sidebar's layout gap is collapsed (see index.css), so
+                // this column spans the whole window and shelf carousels can
+                // reach back underneath the glass. Padding puts ordinary
+                // content back exactly where the gap used to hold it, and
+                // tracks the sidebar when it collapses to icons — `peer`
+                // works because the sidebar root is this element's preceding
+                // sibling.
+                //
+                // `--shell-inset` is the sidebar's width, published here so
+                // every descendant that needs to clear the glass reads the
+                // same number and follows the collapse together.
+                //
+                // Deliberately NOT applied as padding on this column: that
+                // would push <main>'s border box to the sidebar's right edge,
+                // and `overflow-x: hidden` clips at the padding box — so
+                // carousels bled left only to be cut off exactly at the glass.
+                // Each child applies the inset itself instead, which keeps
+                // <main> spanning the full window and clipping at x=0.
+                "[--shell-inset:var(--sidebar-width)] peer-data-[state=collapsed]:[--shell-inset:var(--sidebar-width-icon)]",
                 mode === "right" && hasTrack && "right-player-overlay",
               )}
             >
@@ -253,8 +272,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                   (a) a transparent bar inherits the app-wide
                       <BackgroundCover> tint directly, and
                   (b) track rows inside <main> are clipped by <main>'s
-                      overflow and never appear behind the bar. */}
-              <EntityPageHeader />
+                      overflow and never appear behind the bar.
+                  The wrapper carries the sidebar inset because the header
+                  itself clips (`overflow-hidden`) and has nothing to bleed. */}
+              <div className="shrink-0 pl-(--shell-inset)">
+                <EntityPageHeader />
+              </div>
               {/* Plain scroller — NOT Radix ScrollArea. Radix wraps the
                   content in `display: table; min-width: 100%` which grows
                   to intrinsic width and defeats any nested `overflow-x`
@@ -263,6 +286,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                 ref={mainRef}
                 className={cn(
                   "app-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden",
+                  // The inset lives here rather than on the parent column so
+                  // this element's border box still starts at the window edge.
+                  // `overflow-x: hidden` clips at the padding box, so page
+                  // content sits beside the sidebar while a carousel bleeding
+                  // left survives all the way under the glass.
+                  "pl-(--shell-inset)",
                   // The bottom player floats above this scroller. Keep enough
                   // trailing space for the final row to clear the overlay.
                   mode === "bottom" && hasTrack && "pb-[7.5rem]",

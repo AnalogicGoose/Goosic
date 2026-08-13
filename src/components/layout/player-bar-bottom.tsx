@@ -289,7 +289,10 @@ export function PlayerBarBottom({
         <aside
           className={cn(
             PLAYER_GLASS_SURFACE_CLASS,
-            "absolute inset-x-0 bottom-0 z-30 mr-2 mb-2 flex items-center gap-4 rounded-[999px] border px-4 py-2.5",
+            // See the classic variant below: `left` must clear the sidebar,
+            // because absolute positioning resolves against the content
+            // column's padding box, which starts behind the glass.
+            "absolute right-0 left-(--shell-inset) bottom-0 z-30 mr-2 mb-2 flex items-center gap-4 rounded-[999px] border px-4 py-2.5",
           )}
         >
           {errorBanner}
@@ -362,7 +365,12 @@ export function PlayerBarBottom({
       <aside
         className={cn(
           PLAYER_GLASS_SURFACE_CLASS,
-          "absolute inset-x-0 bottom-0 z-30 mr-2 mb-2 flex flex-col gap-2 rounded-[34px] border px-4 py-3",
+          // `left` is the shell's sidebar inset rather than 0: this bar is
+          // absolutely positioned, so its containing block is the content
+          // column's padding box, which now starts at the window edge behind
+          // the sidebar. `inset-x-0` therefore ran the bar underneath the
+          // sidebar (and `z-30` drew its controls back over the glass).
+          "absolute right-0 left-(--shell-inset) bottom-0 z-30 mr-2 mb-2 flex flex-col gap-2 rounded-[34px] border px-4 py-3",
         )}
       >
         {errorBanner}

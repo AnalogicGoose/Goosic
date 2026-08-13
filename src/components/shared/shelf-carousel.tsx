@@ -40,9 +40,10 @@ export function ShelfCarousel({ shelf, action }: Props) {
     const updateFade = () => {
       const distLeft = el.scrollLeft;
       const distRight = el.scrollWidth - el.clientWidth - el.scrollLeft;
-      const alphaL = Math.max(0, 1 - distLeft / FADE_RAMP);
+      // Only the trailing edge ramps. The leading edge is occluded by the
+      // sidebar glass that covers cards on their way out, so `.shelf-edge-fade`
+      // has no left ramp for this to drive.
       const alphaR = Math.max(0, 1 - distRight / FADE_RAMP);
-      el.style.setProperty("--fade-l", alphaL.toFixed(3));
       el.style.setProperty("--fade-r", alphaR.toFixed(3));
       setCanScrollLeft(distLeft > 1);
       setCanScrollRight(distRight > 1);
