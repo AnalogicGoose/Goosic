@@ -83,7 +83,9 @@ export type GlassRendererVariant =
   | "D0"
   | "D1"
   | "D2"
-  | "D3";
+  | "W1"
+  | "W2"
+  | "W3";
 
 type GlassVariantConfig = {
   colorSpace: GlassColorSpaceMode;
@@ -114,14 +116,19 @@ const GLASS_VARIANTS: Record<GlassRendererVariant, GlassVariantConfig> = {
   A: { colorSpace: "srgb", bezel: false, preBlur: 0, wash: 0 },
   B: { colorSpace: "frost", bezel: false, preBlur: 0, wash: 0 },
   C: { colorSpace: "full", bezel: true, preBlur: 0, wash: 0 },
-  // D is the experimental baseline; D0 is the same thing under its test name.
-  D: { colorSpace: "srgb", bezel: true, preBlur: 0, wash: 0 },
+  // D0/D1 are kept as refraction diagnostics. D2 won the Windows comparison and
+  // is the baseline everything below builds on; `D` is retained as its alias so
+  // older links keep working.
+  D: { colorSpace: "srgb", bezel: true, preBlur: 0.5, wash: 0 },
   D0: { colorSpace: "srgb", bezel: true, preBlur: 0, wash: 0 },
   D1: { colorSpace: "srgb", bezel: true, preBlur: 0.25, wash: 0 },
   D2: { colorSpace: "srgb", bezel: true, preBlur: 0.5, wash: 0 },
-  // Pairs the lighter pre-blur with the wash. Swap in D2's ratio here once the
-  // D1/D2 comparison settles which softening is right.
-  D3: { colorSpace: "srgb", bezel: true, preBlur: 0.25, wash: 18 },
+  // Wash-strength sweep over the D2 optical architecture. Only `wash` differs
+  // between these three and D2, so any change they produce is the colour
+  // contamination and nothing else.
+  W1: { colorSpace: "srgb", bezel: true, preBlur: 0.5, wash: 10 },
+  W2: { colorSpace: "srgb", bezel: true, preBlur: 0.5, wash: 20 },
+  W3: { colorSpace: "srgb", bezel: true, preBlur: 0.5, wash: 32 },
 };
 
 /**
@@ -137,8 +144,13 @@ export const GLASS_COLOR_WASH_BLUR = 24;
 /**
  * Pinned variant, used when the dev selector is unavailable — a packaged build,
  * or any non-DEV bundle. Edit this one line to bake a variant into a release.
+ *
+ * D2 after manual comparison on Windows against native macOS: sRGB, the
+ * canonical frost, and bezel-masked refraction fed a backdrop pre-blurred at
+ * half the frost radius. A remains reachable as `?glass=A` for regression
+ * checks against the original serial path.
  */
-const GLASS_VARIANT_DEFAULT: GlassRendererVariant = "A";
+const GLASS_VARIANT_DEFAULT: GlassRendererVariant = "D2";
 
 const GLASS_VARIANT_KEY = "goosic:glass-variant";
 
