@@ -25,6 +25,7 @@ import {
   fetchPlaylistFirstPage,
 } from "@/lib/innertube/playlist";
 import { fetchWatchQueue } from "@/lib/innertube/radio";
+import { fetchMoodsAndGenresFeedPage } from "@/lib/innertube/explore";
 import { ShelfCarousel } from "@/components/shared/shelf-carousel";
 import { ShelfCard } from "@/components/shared/shelf-card";
 import { TrackList } from "@/components/shared/track-list";
@@ -139,7 +140,9 @@ function SearchPage() {
         </div>
       </div>
 
-      {!query ? null : scope === "library" ? (
+      {!query ? (
+        <SearchLanding />
+      ) : scope === "library" ? (
         <LibraryResults state={library} query={query} />
       ) : error ? (
         <ErrorCard message={(error as Error).message} />
@@ -151,6 +154,157 @@ function SearchPage() {
         <FilterResults data={data} filter={filter} />
       )}
     </div>
+  );
+}
+
+/**
+ * What the page shows before anything has been typed. This used to render
+ * nothing at all, which left Search as a dead form; Apple Music fills the same
+ * space with recent searches and a category grid, so the page is somewhere to
+ * browse rather than only somewhere to type.
+ */
+function SearchLanding() {
+  return (
+    <div className="flex flex-col gap-8">
+      <RecentlySearched />
+      <BrowseCategories />
+    </div>
+  );
+}
+
+/**
+ * The query history the search field's dropdown already keeps, surfaced on the
+ * page itself. Entries are queries rather than the songs Apple Music shows —
+ * that is all `useSearchHistory` records, and inventing artwork for a string
+ * would mean re-running every past search on mount.
+ */
+function RecentlySearched() {
+  const items = useSearchHistory((s) => s.items);
+  const remove = useSearchHistory((s) => s.remove);
+  const clear = useSearchHistory((s) => s.clear);
+  const recent = items.slice(0, 12);
+
+  if (recent.length === 0) return null;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-baseline justify-between gap-3 px-1">
+        <h2 className="text-xl font-semibold tracking-tight">
+          Recently searched
+        </h2>
+        <button
+          type="button"
+          onClick={clear}
+          className="cursor-pointer text-sm font-medium text-brand transition-opacity hover:opacity-80"
+        >
+          Clear
+        </button>
+      </div>
+      {/* Shares `.shelf-scroll` with the carousels so this row bleeds under the
+          sidebar and scrolls the same way the rest of the app does. */}
+      <div className="shelf-scroll shelf-edge-fade flex min-w-0 gap-2 overflow-x-auto overflow-y-hidden pb-3">
+        {recent.map((q) => (
+          <div key={q} className="group/recent relative w-56 shrink-0">
+            <Link
+              to="/search"
+              search={{ q, filter: "all" }}
+              className="flex items-center gap-3 rounded-xl bg-white/5 py-2.5 pl-3 pr-9 transition-colors hover:bg-white/10"
+            >
+              <HistoryIcon className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                {q}
+              </span>
+            </Link>
+            {/* Sits outside the Link so removing an entry cannot navigate. */}
+            <button
+              type="button"
+              aria-label={`Remove ${q} from recent searches`}
+              onClick={() => remove(q)}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 cursor-pointer rounded-full p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-white/10 hover:text-foreground focus-visible:opacity-100 group-hover/recent:opacity-100"
+            >
+              <XIcon className="size-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * YT Music's Moods & genres, laid out as Apple Music lays out Browse
+ * Categories. Shares the `["moods", "v1"]` cache with /moods, so arriving here
+ * from that page costs no extra fetch.
+ */
+function BrowseCategories() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["moods", "v1"],
+    queryFn: () => fetchMoodsAndGenresFeedPage(),
+    // Genre lists are effectively static; don't re-fetch on every visit.
+    staleTime: 30 * 60_000,
+  });
+
+  const categories = useMemo(
+    () =>
+      (data?.shelves ?? [])
+        .flatMap((shelf) => shelf.items)
+        .filter((item) => item.kind === "category"),
+    [data],
+  );
+
+  // A failed genre list is not worth an error state on a page whose real job
+  // is the search field — the section simply doesn't appear.
+  if (error || (!isLoading && categories.length === 0)) return null;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="px-1 text-xl font-semibold tracking-tight">
+        Browse categories
+      </h2>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        {isLoading
+          ? Array.from({ length: 10 }, (_, i) => (
+              <Skeleton key={i} className="aspect-[5/3] rounded-xl" />
+            ))
+          : categories.map((item) => (
+              <CategoryTile key={`${item.id}-${item.title}`} item={item} />
+            ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * YT Music ships a colour with every category tile (`leftStripeColor`), which
+ * the sidebar-style pill uses as a 4px stripe. At this size the colour can
+ * carry the whole tile, which is what makes the grid read like Apple Music's.
+ */
+function CategoryTile({ item }: { item: ShelfItem }) {
+  const tint = item.tint ?? "#5a5a5a";
+  return (
+    <Link
+      to="/moods/$id"
+      params={{ id: item.id }}
+      search={{ p: item.categoryParams ?? "", t: item.title }}
+      className="group relative flex aspect-[5/3] items-end overflow-hidden rounded-xl p-3 transition-transform hover:scale-[1.02] active:scale-[0.99]"
+      style={{ backgroundColor: tint }}
+    >
+      {/* A flat fill reads as a swatch, so a sheen off the top-left gives the
+          tile a light source. The floor scrim is doing real work rather than
+          decoration: YT Music assigns near-white tints to some genres (Focus,
+          Energize), where white type would otherwise sit on white. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(150deg, rgba(255,255,255,0.26), transparent 55%), linear-gradient(0deg, rgba(0,0,0,0.62) 4%, rgba(0,0,0,0.28) 34%, transparent 62%)",
+        }}
+      />
+      <span className="relative z-10 text-base font-semibold leading-tight text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]">
+        {item.title}
+      </span>
+    </Link>
   );
 }
 
@@ -815,11 +969,13 @@ function SearchField({
           }
         }}
       >
-        <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           ref={inputRef}
           placeholder="Search songs, albums, artists…"
-          className="pl-9 pr-9"
+          // A pill rather than a rounded rectangle: this is the page's primary
+          // control, and the shape matches the scope toggle beside it.
+          className="h-10 rounded-full pl-10 pr-10"
           value={value}
           onChange={(e) => {
             userTypedRef.current = true;
