@@ -42,11 +42,6 @@ export function glassSurfaceClass({
 /** Full adaptive/refraction material for navigational and control surfaces. */
 export const GLASS_SURFACE_CLASS = glassSurfaceClass();
 
-/** Figma Active=False: Shadow -> Fill, with no Glass Effect layer. */
-export const STATIC_GLASS_SURFACE_CLASS = glassSurfaceClass({
-  variant: "static",
-});
-
 /** Active=True small-control material used by primary actions. */
 export const INTERACTIVE_GLASS_CONTROL_CLASS = glassSurfaceClass({
   scale: "small",
