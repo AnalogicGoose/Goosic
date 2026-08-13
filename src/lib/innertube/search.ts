@@ -1,6 +1,7 @@
 import type { Shelf, SearchResults, ShelfItem, TopResultAction } from "./types";
 import {
   collectShelfNodes,
+  innertubePost,
   mapResponsiveListItem,
   mapShelfWrapper,
   pageTypeToKind,
@@ -274,4 +275,64 @@ export async function fetchSearch(
     return { query, shelves: buildFilterShelves(sections, filter) };
   }
   return buildAllResults(query, sections);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Search suggestions                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One row of YT Music's search-suggestion dropdown. The endpoint returns two
+ * kinds interleaved across sections: plain query completions, and concrete
+ * entities (an artist, a song) with artwork.
+ */
+export type SearchSuggestion =
+  | { kind: "query"; query: string }
+  | { kind: "entity"; item: ShelfItem };
+
+/**
+ * Live completions for a partial query, from the same endpoint the YT Music
+ * web client uses.
+ *
+ * Callers are expected to debounce: this fires on every keystroke otherwise,
+ * and the response is not worth a request per character.
+ */
+export async function fetchSearchSuggestions(
+  input: string,
+): Promise<SearchSuggestion[]> {
+  const trimmed = input.trim();
+  if (!trimmed) return [];
+
+  const json = await innertubePost("music/get_search_suggestions", {
+    input: trimmed,
+  });
+
+  const out: SearchSuggestion[] = [];
+  const sections: YtNode[] = json?.contents ?? [];
+  for (const section of sections) {
+    const rows: YtNode[] =
+      section?.searchSuggestionsSectionRenderer?.contents ?? [];
+    for (const row of rows) {
+      const suggestion = row?.searchSuggestionRenderer;
+      if (suggestion) {
+        // `suggestion.runs` carries the bolded/unbolded split for highlighting;
+        // the flattened text is the query either way.
+        const query =
+          readRuns(suggestion.suggestion) ||
+          suggestion.navigationEndpoint?.searchEndpoint?.query;
+        if (typeof query === "string" && query) {
+          out.push({ kind: "query", query });
+        }
+        continue;
+      }
+
+      const entity = row?.musicResponsiveListItemRenderer;
+      if (entity) {
+        const item = mapResponsiveListItem(entity);
+        if (item) out.push({ kind: "entity", item });
+      }
+    }
+  }
+
+  return out;
 }
