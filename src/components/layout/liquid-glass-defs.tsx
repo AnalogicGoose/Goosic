@@ -85,7 +85,10 @@ export type GlassRendererVariant =
   | "D2"
   | "W1"
   | "W2"
-  | "W3";
+  | "W3"
+  | "L1"
+  | "L2"
+  | "L3";
 
 type GlassVariantConfig = {
   colorSpace: GlassColorSpaceMode;
@@ -110,36 +113,59 @@ type GlassVariantConfig = {
    * only.
    */
   wash: number;
+  /** Radius of the colour wash, in CSS px on top of the frost it carries. */
+  washBlur: number;
+  /**
+   * Low-frequency luminance contamination, 0-100. 0 disables the branch.
+   *
+   * The colour wash cannot supply this. It is derived from the same backdrop as
+   * the body, so its hue is a blurred average of colour the body already shows
+   * — and `color` blending deliberately discards luminance, which is the one
+   * axis where a heavily blurred copy genuinely differs from the body. That is
+   * why sweeping its strength barely moved: it amplifies a near-zero
+   * difference. Broad bright and dark regions bleeding in is what remains.
+   */
+  luma: number;
+  /** Radius of the luminance wash. Wants to be well above the colour wash. */
+  lumaBlur: number;
+  /** How the luminance branch reaches the body. */
+  lumaMode: "normal" | "luminosity" | "soft-light";
 };
+
+/** Every variant inherits these and overrides what it is testing. */
+const GLASS_VARIANT_BASE = {
+  colorSpace: "srgb",
+  bezel: true,
+  preBlur: 0.5,
+  wash: 0,
+  washBlur: 24,
+  luma: 0,
+  lumaBlur: 48,
+  lumaMode: "luminosity",
+} as const satisfies GlassVariantConfig;
 
 const GLASS_VARIANTS: Record<GlassRendererVariant, GlassVariantConfig> = {
-  A: { colorSpace: "srgb", bezel: false, preBlur: 0, wash: 0 },
-  B: { colorSpace: "frost", bezel: false, preBlur: 0, wash: 0 },
-  C: { colorSpace: "full", bezel: true, preBlur: 0, wash: 0 },
+  A: { ...GLASS_VARIANT_BASE, colorSpace: "srgb", bezel: false, preBlur: 0 },
+  B: { ...GLASS_VARIANT_BASE, colorSpace: "frost", bezel: false, preBlur: 0 },
+  C: { ...GLASS_VARIANT_BASE, colorSpace: "full", preBlur: 0 },
   // D0/D1 are kept as refraction diagnostics. D2 won the Windows comparison and
-  // is the baseline everything below builds on; `D` is retained as its alias so
-  // older links keep working.
-  D: { colorSpace: "srgb", bezel: true, preBlur: 0.5, wash: 0 },
-  D0: { colorSpace: "srgb", bezel: true, preBlur: 0, wash: 0 },
-  D1: { colorSpace: "srgb", bezel: true, preBlur: 0.25, wash: 0 },
-  D2: { colorSpace: "srgb", bezel: true, preBlur: 0.5, wash: 0 },
-  // Wash-strength sweep over the D2 optical architecture. Only `wash` differs
-  // between these three and D2, so any change they produce is the colour
-  // contamination and nothing else.
-  W1: { colorSpace: "srgb", bezel: true, preBlur: 0.5, wash: 10 },
-  W2: { colorSpace: "srgb", bezel: true, preBlur: 0.5, wash: 20 },
-  W3: { colorSpace: "srgb", bezel: true, preBlur: 0.5, wash: 32 },
+  // is the baseline everything below builds on; `D` is retained as its alias.
+  D: { ...GLASS_VARIANT_BASE },
+  D0: { ...GLASS_VARIANT_BASE, preBlur: 0 },
+  D1: { ...GLASS_VARIANT_BASE, preBlur: 0.25 },
+  D2: { ...GLASS_VARIANT_BASE },
+  // Colour-wash sweep. Kept as a diagnostic: on Windows these proved almost
+  // indistinguishable from D2, which is the evidence behind `luma` existing.
+  W1: { ...GLASS_VARIANT_BASE, wash: 10 },
+  W2: { ...GLASS_VARIANT_BASE, wash: 20 },
+  W3: { ...GLASS_VARIANT_BASE, wash: 32 },
+  // Luminance contamination, one architecture each, colour wash off so the
+  // luminance contribution is the only thing changing against D2.
+  L1: { ...GLASS_VARIANT_BASE, luma: 10, lumaBlur: 48, lumaMode: "normal" },
+  L2: { ...GLASS_VARIANT_BASE, luma: 18, lumaBlur: 48, lumaMode: "luminosity" },
+  L3: { ...GLASS_VARIANT_BASE, luma: 25, lumaBlur: 72, lumaMode: "soft-light" },
 };
 
-/**
- * Extra blur for the colour-wash branch, in CSS pixels on top of the frost it
- * already carries. Large on purpose: the branch exists to survive only broad
- * colour regions, and it reuses the frost intermediate rather than re-reading
- * the backdrop, so the radii compose instead of costing a second full chain.
- *
- * EXPERIMENTAL — not an Apple/Figma value.
- */
-export const GLASS_COLOR_WASH_BLUR = 24;
 
 /**
  * Pinned variant, used when the dev selector is unavailable — a packaged build,
@@ -193,19 +219,64 @@ function readGlassVariant(): GlassRendererVariant | null {
 export const GLASS_RENDERER_VARIANT: GlassRendererVariant =
   readGlassVariant() ?? GLASS_VARIANT_DEFAULT;
 
+/**
+ * Dev-only numeric overrides, so a sweep does not need a rebuild per value:
+ *
+ *   ?washBlur=48&washStrength=20
+ *   ?lumaBlur=72&lumaStrength=25&lumaMode=soft-light
+ *
+ * Unlike the variant these are not persisted — they live in the URL, which
+ * keeps a hard reload reproducible and stops a stale value following you into
+ * the next comparison.
+ */
+function devParam(name: string): string | null {
+  if (!import.meta.env.DEV || typeof window === "undefined") return null;
+  try {
+    return new URLSearchParams(window.location.search).get(name);
+  } catch {
+    return null;
+  }
+}
+function devNumber(name: string, fallback: number): number {
+  const raw = devParam(name);
+  const value = raw === null ? Number.NaN : Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
 export const GLASS_COLOR_SPACE_MODE: GlassColorSpaceMode =
   GLASS_VARIANTS[GLASS_RENDERER_VARIANT].colorSpace;
 export const GLASS_BEZEL_REFRACTION: boolean =
   GLASS_VARIANTS[GLASS_RENDERER_VARIANT].bezel;
 export const GLASS_REFRACTION_PREBLUR_RATIO: number =
   GLASS_VARIANTS[GLASS_RENDERER_VARIANT].preBlur;
-export const GLASS_COLOR_WASH_STRENGTH: number =
-  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].wash;
+export const GLASS_COLOR_WASH_STRENGTH: number = devNumber(
+  "washStrength",
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].wash,
+);
+export const GLASS_COLOR_WASH_BLUR: number = devNumber(
+  "washBlur",
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].washBlur,
+);
+export const GLASS_LUMA_WASH_STRENGTH: number = devNumber(
+  "lumaStrength",
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].luma,
+);
+export const GLASS_LUMA_WASH_BLUR: number = devNumber(
+  "lumaBlur",
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].lumaBlur,
+);
+export const GLASS_LUMA_WASH_MODE: "normal" | "luminosity" | "soft-light" =
+  (() => {
+    const raw = devParam("lumaMode");
+    return raw === "normal" || raw === "luminosity" || raw === "soft-light"
+      ? raw
+      : GLASS_VARIANTS[GLASS_RENDERER_VARIANT].lumaMode;
+  })();
 
 if (import.meta.env.DEV && typeof window !== "undefined") {
   // Printed so a screenshot can always be traced back to a configuration.
   console.info(
-    `[glass] variant ${GLASS_RENDERER_VARIANT} — colour space: ${GLASS_COLOR_SPACE_MODE}, bezel: ${GLASS_BEZEL_REFRACTION}, refraction pre-blur: ${GLASS_REFRACTION_PREBLUR_RATIO}x frost, colour wash: ${GLASS_COLOR_WASH_STRENGTH}`,
+    `[glass] variant ${GLASS_RENDERER_VARIANT} — space ${GLASS_COLOR_SPACE_MODE}, bezel ${GLASS_BEZEL_REFRACTION}, pre-blur ${GLASS_REFRACTION_PREBLUR_RATIO}x frost, colour wash ${GLASS_COLOR_WASH_STRENGTH}@${GLASS_COLOR_WASH_BLUR}px, luma wash ${GLASS_LUMA_WASH_STRENGTH}@${GLASS_LUMA_WASH_BLUR}px (${GLASS_LUMA_WASH_MODE})`,
   );
 }
 
@@ -596,9 +667,11 @@ function appendFilter(
     GLASS_COLOR_SPACE_MODE === "srgb" ? "sRGB" : "linearRGB";
   const mixSpace = GLASS_COLOR_SPACE_MODE === "full" ? "linearRGB" : "sRGB";
 
-  // When the wash branch is active it owns the final `dispersed` name and the
-  // frost/refraction composite lands in an intermediate instead.
-  const bodyResult = GLASS_COLOR_WASH_STRENGTH > 0 ? "body_mix" : "dispersed";
+  // Whichever contamination stage runs last owns the final `dispersed` name, so
+  // the frost/refraction composite lands in an intermediate when either is on.
+  const washOn = GLASS_COLOR_WASH_STRENGTH > 0;
+  const lumaOn = GLASS_LUMA_WASH_STRENGTH > 0;
+  const bodyResult = washOn || lumaOn ? "body_mix" : "dispersed";
 
   const blur = svgElement("feGaussianBlur");
   setAttributes(blur, {
@@ -793,7 +866,7 @@ function appendFilter(
     filter.append(deviation, toAlpha, shape, edgeOptics, spatial);
   }
 
-  if (GLASS_COLOR_WASH_STRENGTH > 0) {
+  if (washOn) {
     // Broad background colour bleeding into the surface — the dirty, smoky
     // character native glass has and a clean blur does not. Reuses the frost
     // intermediate rather than re-reading the backdrop, so the radii compose
@@ -822,9 +895,53 @@ function appendFilter(
       in2: bodyResult,
       mode: "color",
       "color-interpolation-filters": mixSpace,
-      result: "dispersed",
+      result: lumaOn ? "colour_washed" : "dispersed",
     });
     filter.append(wash, washAlpha, contaminated);
+  }
+
+  if (lumaOn) {
+    // Broad bright and dark regions from the scene becoming part of the
+    // material. Separate from the colour wash because the two contaminate
+    // different axes, and because the colour branch provably cannot supply
+    // this: `color` blending keeps the body's luminance by definition.
+    //
+    // Reads the frost intermediate for the same reason the colour wash does —
+    // the radii compose, so this costs one blur rather than a second read of
+    // the backdrop.
+    const lumaBlur = svgElement("feGaussianBlur");
+    setAttributes(lumaBlur, {
+      in: "blurred_source",
+      stdDeviation: GLASS_LUMA_WASH_BLUR,
+      "color-interpolation-filters": frostSpace,
+      result: "luma_blur",
+    });
+    // Strip chroma before it reaches the body: this branch is carrying broad
+    // light and shade, and leaving colour in would double up on the wash.
+    const lumaMono = svgElement("feColorMatrix");
+    setAttributes(lumaMono, {
+      in: "luma_blur",
+      type: "saturate",
+      values: 0,
+      result: "luma_mono",
+    });
+    const lumaAlpha = svgElement("feComponentTransfer");
+    setAttributes(lumaAlpha, { in: "luma_mono", result: "luma" });
+    const lumaFunc = svgElement("feFuncA");
+    setAttributes(lumaFunc, {
+      type: "linear",
+      slope: GLASS_LUMA_WASH_STRENGTH / 100,
+    });
+    lumaAlpha.append(lumaFunc);
+    const lumaBlend = svgElement("feBlend");
+    setAttributes(lumaBlend, {
+      in: "luma",
+      in2: washOn ? "colour_washed" : bodyResult,
+      mode: GLASS_LUMA_WASH_MODE,
+      "color-interpolation-filters": mixSpace,
+      result: "dispersed",
+    });
+    filter.append(lumaBlur, lumaMono, lumaAlpha, lumaBlend);
   }
   const specularImage = svgElement("feImage");
   setAttributes(specularImage, {
@@ -1160,7 +1277,7 @@ export function LiquidGlassDefs() {
       const lensKey = material.lens
         ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
         : "none";
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}w${GLASS_COLOR_WASH_STRENGTH}-${GLASS_COLOR_WASH_BLUR}m${GLASS_LUMA_WASH_STRENGTH}-${GLASS_LUMA_WASH_BLUR}-${GLASS_LUMA_WASH_MODE}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 
