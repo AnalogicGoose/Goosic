@@ -11,10 +11,13 @@ import {
 } from "./liquid-glass-defs";
 
 describe("FIGMA_GLASS_PRESET", () => {
+  // The per-material lenses in themes.ts are what the renderer actually reads;
+  // this stays as the documented Figma reference and the default refraction
+  // for `createConvexRefractionProfile`.
   it("keeps the exposed Active=True optics values exact", () => {
     expect(FIGMA_GLASS_PRESET).toEqual({
-      refraction: 70,
-      depth: 30,
+      refraction: 30,
+      depth: 20,
       dispersion: 20,
       splay: 20,
     });
@@ -69,8 +72,11 @@ describe("FIGMA_SPECULAR_RIM_WIDTH", () => {
 describe("FIGMA_GLASS_REGULAR_PAINTS", () => {
   it("keeps the supplied Regular fills and blend modes exact", () => {
     expect(FIGMA_GLASS_REGULAR_PAINTS).toEqual({
-      base: "#404040",
-      baseOpacity: 0.8,
+      base: "#333333",
+      // Off: the luminosity flood overwrote the backdrop's tonal range, which
+      // is what made Regular read as a flat gray panel on Windows. Regular's
+      // level is carried by its `shade` token instead.
+      baseOpacity: 0,
       baseBlendMode: "luminosity",
       overlay: "#ffffff",
       overlayOpacity: 0.2,

@@ -249,17 +249,33 @@ export type WebGlassMaterialTokens = {
   /** Backdrop saturation multiplier. Above 1 for glass, below 1 for Classic. */
   saturation: number;
   /**
-   * Whether this material bends light at its edge.
+   * The edge lens this material bends light with, or `null` when it has none.
    *
-   * Only the Liquid Glass family does. The Classic materials are frosted
-   * panes, not lenses: macOS renders them as a heavy blur plus an opacity
-   * tint, with no displacement at the rim at all. So the family selects the
-   * renderer, not merely its parameters — a Classic stop skips the SVG
-   * displacement pipeline entirely and resolves to a plain CSS
+   * Only the Liquid Glass family bends light. The Classic materials are
+   * frosted panes, not lenses: macOS renders them as a heavy blur plus an
+   * opacity tint, with no displacement at the rim at all. So the family
+   * selects the renderer, not merely its parameters — a `null` lens skips the
+   * SVG displacement pipeline entirely and resolves to a plain CSS
    * `blur() saturate()` backdrop filter, which is both more faithful and far
    * cheaper than refracting a backdrop that Apple does not refract.
+   *
+   * Per material rather than one global preset: the stops differ in how much
+   * they bend light, not only in how much they frost it, and Clear in
+   * particular wants a much shallower lens than Regular.
    */
-  refraction: boolean;
+  lens: GlassLensTokens | null;
+};
+
+/** Figma's lens controls, each 0-100. */
+export type GlassLensTokens = {
+  /** How strongly the rim bends light. 0 leaves the backdrop undistorted. */
+  refraction: number;
+  /** How far in from the edge the bezel reaches, in CSS pixels. */
+  depth: number;
+  /** How far the RGB channels separate through the bend. */
+  dispersion: number;
+  /** How widely that separation splays across the bezel. */
+  splay: number;
 };
 
 export const WEB_GLASS_MATERIAL_TOKENS: Record<
@@ -275,24 +291,34 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
   // as "more material", use shade for that, which is what Apple does.
   "glass-clear": {
     frost: 1,
-    luminosity: 6,
+    // Measured 35,35,35 on Windows against 41,41,41 on macOS. The luminosity
+    // paint mixes toward white at this weight, so 35 + (255-35)*0.03 ~= 41.
+    luminosity: 3,
     shade: 0,
     saturation: 1.1,
-    refraction: true,
+    lens: { refraction: 30, depth: 20, dispersion: 20, splay: 20 },
   },
   "glass-regular": {
-    frost: 5,
-    luminosity: 10,
-    shade: 0,
+    frost: 2,
+    // Measured 42,42,42 on Windows against 39,39,39 on macOS. Shade is a plain
+    // black composite, so 42 * (1 - 0.07) ~= 39. The player bar reads lighter
+    // than the sidebar for the same reason it always did — a brighter backdrop
+    // behind a smaller surface — and this pulls both down together.
+    luminosity: 0,
+    shade: 7,
     saturation: 1.35,
-    refraction: true,
+    // Deeper and stronger than Clear, which is the difference between the two
+    // stops: Regular bends the backdrop, Clear barely disturbs it. These are
+    // the original Figma optics; Clear now carries its own tuned set instead of
+    // both sharing one global preset.
+    lens: { refraction: 70, depth: 30, dispersion: 20, splay: 20 },
   },
   "glass-subdued": {
     frost: 14,
     luminosity: 2,
     shade: 22,
     saturation: 1.2,
-    refraction: true,
+    lens: { refraction: 70, depth: 30, dispersion: 20, splay: 20 },
   },
   // The Classic stops are frosted panes: heavy blur, an opacity tint, no lens.
   // Their frost runs far above the glass family's because the blur is the whole
@@ -302,35 +328,35 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 4,
     shade: 12,
     saturation: 1.1,
-    refraction: false,
+    lens: null,
   },
   "blur-thin": {
     frost: 40,
     luminosity: 4,
     shade: 20,
     saturation: 0.95,
-    refraction: false,
+    lens: null,
   },
   "blur-regular": {
     frost: 60,
     luminosity: 3,
     shade: 30,
     saturation: 0.8,
-    refraction: false,
+    lens: null,
   },
   "blur-thick": {
     frost: 85,
     luminosity: 3,
     shade: 42,
     saturation: 0.6,
-    refraction: false,
+    lens: null,
   },
   "blur-chrome": {
     frost: 100,
     luminosity: 5,
     shade: 38,
     saturation: 0.45,
-    refraction: false,
+    lens: null,
   },
 };
 

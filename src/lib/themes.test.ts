@@ -39,10 +39,10 @@ describe("Windows glass material calibration", () => {
   it("keeps Clear nearly transparent at 1px frost", () => {
     expect(webGlassMaterialTokens("glass-clear")).toEqual({
       frost: 1,
-      luminosity: 6,
+      luminosity: 3,
       shade: 0,
       saturation: 1.1,
-      refraction: true,
+      lens: { refraction: 30, depth: 20, dispersion: 20, splay: 20 },
     });
   });
 
@@ -52,7 +52,7 @@ describe("Windows glass material calibration", () => {
       luminosity: 2,
       shade: 22,
       saturation: 1.2,
-      refraction: true,
+      lens: { refraction: 70, depth: 30, dispersion: 20, splay: 20 },
     });
   });
 });

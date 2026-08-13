@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { isWindowsWebview } from "@/lib/platform";
 import { useSettingsStore } from "@/lib/store/settings";
-import { webGlassMaterialTokens } from "@/lib/themes";
+import { webGlassMaterialTokens, type GlassLensTokens } from "@/lib/themes";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 // Only the explicit Active=True material gets the WebView2 lens. Static
@@ -15,8 +15,8 @@ export const WINDOWS_UI_SUPERELLIPSE_K = 1;
 // Figma Glass preset supplied by the product owner. Keep this as the single
 // optics source of truth for players, menus, popovers, and dialogs.
 export const FIGMA_GLASS_PRESET = {
-  refraction: 70,
-  depth: 30,
+  refraction: 30,
+  depth: 20,
   dispersion: 20,
   splay: 20,
 } as const;
@@ -30,8 +30,8 @@ export const FIGMA_GLASS_FRAME_PAINTS = {
 } as const;
 
 export const FIGMA_GLASS_REGULAR_PAINTS = {
-  base: "#404040",
-  baseOpacity: 0.8,
+  base: "#333333",
+  baseOpacity: 0,
   baseBlendMode: "luminosity",
   overlay: "#ffffff",
   overlayOpacity: 0.2,
@@ -170,6 +170,7 @@ function createMaps(
   height: number,
   radius: number,
   superellipseK: number,
+  lens: GlassLensTokens,
 ): MaterialMaps {
   // feImage scales this capped raster back to the exact CSS-pixel size. The
   // radius is scaled with it so the bezel stays physically consistent.
@@ -186,9 +187,9 @@ function createMaps(
   const maximumDepth = Math.max(1, Math.min(rasterWidth, rasterHeight) / 2 - 1);
   const bezelWidth = Math.min(
     maximumDepth,
-    FIGMA_GLASS_PRESET.depth * rasterScale,
+    lens.depth * rasterScale,
   );
-  const profile = createConvexRefractionProfile();
+  const profile = createConvexRefractionProfile(lens.refraction);
   const specularRimWidth = Math.max(1, FIGMA_SPECULAR_RIM_WIDTH * rasterScale);
 
   const displacementCanvas = document.createElement("canvas");
@@ -328,6 +329,7 @@ function getCachedMaps(
   height: number,
   radius: number,
   superellipseK: number,
+  lens: GlassLensTokens,
 ): MaterialMaps {
   const cached = mapCache.get(key);
   if (cached) {
@@ -337,7 +339,7 @@ function getCachedMaps(
     return cached;
   }
 
-  const maps = createMaps(width, height, radius, superellipseK);
+  const maps = createMaps(width, height, radius, superellipseK, lens);
   mapCache.set(key, maps);
   while (mapCache.size > MAX_CACHED_MAPS) {
     const oldestKey = mapCache.keys().next().value;
@@ -370,9 +372,9 @@ function appendFilter(
   refractionLevel: number,
   saturation: number,
   applyRegularPaints: boolean,
-  applySubduedPaints: boolean,
-  subduedLuminosity: number,
-  subduedShade: number,
+  materialLuminosity: number,
+  materialShade: number,
+  lens: GlassLensTokens,
 ): void {
   const filter = svgElement("filter");
   setAttributes(filter, {
@@ -415,8 +417,8 @@ function appendFilter(
   const baseScale = maps.maximumDisplacement * refractionLevel;
   const channelSplay =
     maps.maximumDisplacement *
-    (FIGMA_GLASS_PRESET.dispersion / 100) *
-    (FIGMA_GLASS_PRESET.splay / 100);
+    (lens.dispersion / 100) *
+    (lens.splay / 100);
 
   // Figma exposes dispersion and splay as separate Glass-effect values. SVG
   // has no native chromatic-dispersion primitive, so the faithful web
@@ -606,52 +608,53 @@ function appendFilter(
     paintedResult = "with_regular_paints";
   }
 
-  if (applySubduedPaints) {
-    // Native Subdued retains the backdrop's colour but lowers its luminance.
-    // Apply the material's shade after the common frame paints, then restore
-    // only its small luminosity term; extra frost alone produced the milky
-    // Windows bar seen beside the native 2560x1440 reference.
-    const subduedShadeLayer = svgElement("feFlood");
-    setAttributes(subduedShadeLayer, {
+  if (materialShade > 0 || materialLuminosity > 0) {
+    // Retains the backdrop's colour but moves its luminance: shade composites
+    // black over the frame paints, luminosity mixes back toward white. This is
+    // every refractive stop's brightness control, not just Subdued's — it was
+    // gated on that one material, which left Clear and Regular with no way to
+    // match their macOS counterparts however their tokens were set.
+    const materialShadeLayer = svgElement("feFlood");
+    setAttributes(materialShadeLayer, {
       "flood-color": "#000000",
-      "flood-opacity": subduedShade / 100,
+      "flood-opacity": materialShade / 100,
       x: 0,
       y: 0,
       width,
       height,
-      result: "subdued_shade",
+      result: "material_shade",
     });
-    const withSubduedShade = svgElement("feBlend");
-    setAttributes(withSubduedShade, {
-      in: "subdued_shade",
+    const withMaterialShade = svgElement("feBlend");
+    setAttributes(withMaterialShade, {
+      in: "material_shade",
       in2: "with_frame_paints",
       mode: "normal",
-      result: "with_subdued_shade",
+      result: "with_material_shade",
     });
-    const subduedLuminosityLayer = svgElement("feFlood");
-    setAttributes(subduedLuminosityLayer, {
+    const materialLuminosityLayer = svgElement("feFlood");
+    setAttributes(materialLuminosityLayer, {
       "flood-color": "#ffffff",
-      "flood-opacity": subduedLuminosity / 100,
+      "flood-opacity": materialLuminosity / 100,
       x: 0,
       y: 0,
       width,
       height,
-      result: "subdued_luminosity",
+      result: "material_luminosity",
     });
-    const withSubduedPaints = svgElement("feBlend");
-    setAttributes(withSubduedPaints, {
-      in: "subdued_luminosity",
-      in2: "with_subdued_shade",
+    const withMaterialPaints = svgElement("feBlend");
+    setAttributes(withMaterialPaints, {
+      in: "material_luminosity",
+      in2: "with_material_shade",
       mode: "luminosity",
-      result: "with_subdued_paints",
+      result: "with_material_paints",
     });
     primitives.push(
-      subduedShadeLayer,
-      withSubduedShade,
-      subduedLuminosityLayer,
-      withSubduedPaints,
+      materialShadeLayer,
+      withMaterialShade,
+      materialLuminosityLayer,
+      withMaterialPaints,
     );
-    paintedResult = "with_subdued_paints";
+    paintedResult = "with_material_paints";
   }
 
   // Specular is the final optical layer. Putting material paints after this
@@ -674,10 +677,15 @@ function geometryKey(
   height: number,
   radius: number,
   superellipseK: number,
+  lens: GlassLensTokens,
 ): string {
   // Buckets avoid regenerating hundreds of near-identical raster maps during
   // resize; the maps are stretched by feImage to each panel's exact size.
-  return `${Math.max(8, Math.round(width / 8) * 8)}x${Math.max(8, Math.round(height / 8) * 8)}r${Math.max(1, Math.round(radius))}k${superellipseK}`;
+  //
+  // The lens belongs in the key: the maps are built from its refraction and
+  // depth, so without it two materials with different lenses collide on one
+  // cached raster and the second silently renders with the first's optics.
+  return `${Math.max(8, Math.round(width / 8) * 8)}x${Math.max(8, Math.round(height / 8) * 8)}r${Math.max(1, Math.round(radius))}k${superellipseK}l${lens.refraction}-${lens.depth}`;
 }
 
 /**
@@ -692,11 +700,10 @@ export function LiquidGlassDefs() {
   // stop or a cheaper Classic blur stop.
   const glassMaterial = useSettingsStore((s) => s.glassMaterial);
   const tokens = webGlassMaterialTokens(glassMaterial);
-  const { frost, saturation, refraction } = tokens;
+  const { frost, saturation, lens } = tokens;
   const material = {
     ...tokens,
     applyRegularPaints: glassMaterial === "glass-regular",
-    applySubduedPaints: glassMaterial === "glass-subdued",
   };
   const materialRef = useRef(material);
   materialRef.current = material;
@@ -704,7 +711,7 @@ export function LiquidGlassDefs() {
 
   useEffect(() => {
     remeasureAllRef.current?.();
-  }, [frost, saturation, refraction, glassMaterial]);
+  }, [frost, saturation, lens, glassMaterial]);
 
   useEffect(() => {
     if (!isWindowsWebview() || !defsRef.current) return;
@@ -750,11 +757,18 @@ export function LiquidGlassDefs() {
       const material = materialRef.current;
       const blurLevel =
         material.frost * (isSmall ? SMALL_GLASS_FROST_RATIO : 1);
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}s${material.saturation}${material.refraction ? "r" : "f"}${material.applyRegularPaints ? "p" : "n"}${material.applySubduedPaints ? `d${material.luminosity}-${material.shade}` : ""}`;
+      // Every input the filter is built from belongs here. Anything omitted is
+      // a value the user can change while this early-return keeps the old
+      // filter on screen — which is exactly why the lens and the luminance
+      // pair used to look inert.
+      const lensKey = material.lens
+        ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
+        : "none";
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 
-      if (!material.refraction) {
+      if (!material.lens) {
         const plain = `blur(${blurLevel}px) saturate(${material.saturation})`;
         element.style.setProperty("--liquid-glass-filter", plain);
         element.style.setProperty("backdrop-filter", plain);
@@ -772,7 +786,8 @@ export function LiquidGlassDefs() {
       // Raster maps stay cached in 8px buckets (feImage stretches them the
       // last few pixels), but the filter geometry itself is exact — a bucket
       // rounded below the panel size leaves an unmapped displacement strip.
-      const key = geometryKey(width, height, radius, superellipseK);
+      const lens = material.lens;
+      const key = geometryKey(width, height, radius, superellipseK, lens);
       const [size, radiusPart] = key.split("r");
       const [mapWidth, mapHeight] = size.split("x").map(Number);
       const maps = getCachedMaps(
@@ -781,6 +796,7 @@ export function LiquidGlassDefs() {
         mapHeight,
         Number(radiusPart.split("k")[0]),
         superellipseK,
+        lens,
       );
       // Fresh id per geometry change: swapping the url() reference is the
       // repaint signal Chromium reliably honors for backdrop filters. The
@@ -798,9 +814,9 @@ export function LiquidGlassDefs() {
         refractionLevel,
         material.saturation,
         material.applyRegularPaints,
-        material.applySubduedPaints,
         material.luminosity,
         material.shade,
+        lens,
       );
       const filterValue = `url("#${id}")`;
       element.style.setProperty("--liquid-glass-filter", filterValue);
