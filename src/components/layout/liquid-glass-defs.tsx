@@ -75,17 +75,64 @@ export type GlassColorSpaceMode = "srgb" | "frost" | "full";
  * B and D exist to separate the two contributions: if C wins, D says whether it
  * was the pass architecture and B says whether it was the colour space.
  */
-export type GlassRendererVariant = "A" | "B" | "C" | "D";
+export type GlassRendererVariant =
+  | "A"
+  | "B"
+  | "C"
+  | "D"
+  | "D0"
+  | "D1"
+  | "D2"
+  | "D3";
 
-const GLASS_VARIANTS: Record<
-  GlassRendererVariant,
-  { colorSpace: GlassColorSpaceMode; bezel: boolean }
-> = {
-  A: { colorSpace: "srgb", bezel: false },
-  B: { colorSpace: "frost", bezel: false },
-  C: { colorSpace: "full", bezel: true },
-  D: { colorSpace: "srgb", bezel: true },
+type GlassVariantConfig = {
+  colorSpace: GlassColorSpaceMode;
+  bezel: boolean;
+  /**
+   * Pre-blur on the refraction branch, as a fraction of the frost radius.
+   *
+   * 0 samples the raw backdrop, which reads as a sharp copy of the background
+   * pasted into the bezel. Native refraction carries more spatial information
+   * than the frost body but is still inside the same material, so the branch
+   * wants a light low-pass — less than the frost, more than nothing. Expressed
+   * against the frost radius so it scales with the material rather than being
+   * an absolute that only suits one stop.
+   */
+  preBlur: number;
+  /**
+   * Low-frequency colour wash, 0-100. 0 disables the branch entirely.
+   *
+   * Broad background colour bleeding into the material is what gives native
+   * glass its dirty, smoky character. Deliberately not more grey opacity —
+   * that is what washed Windows out in the first place. This carries colour
+   * only.
+   */
+  wash: number;
 };
+
+const GLASS_VARIANTS: Record<GlassRendererVariant, GlassVariantConfig> = {
+  A: { colorSpace: "srgb", bezel: false, preBlur: 0, wash: 0 },
+  B: { colorSpace: "frost", bezel: false, preBlur: 0, wash: 0 },
+  C: { colorSpace: "full", bezel: true, preBlur: 0, wash: 0 },
+  // D is the experimental baseline; D0 is the same thing under its test name.
+  D: { colorSpace: "srgb", bezel: true, preBlur: 0, wash: 0 },
+  D0: { colorSpace: "srgb", bezel: true, preBlur: 0, wash: 0 },
+  D1: { colorSpace: "srgb", bezel: true, preBlur: 0.25, wash: 0 },
+  D2: { colorSpace: "srgb", bezel: true, preBlur: 0.5, wash: 0 },
+  // Pairs the lighter pre-blur with the wash. Swap in D2's ratio here once the
+  // D1/D2 comparison settles which softening is right.
+  D3: { colorSpace: "srgb", bezel: true, preBlur: 0.25, wash: 18 },
+};
+
+/**
+ * Extra blur for the colour-wash branch, in CSS pixels on top of the frost it
+ * already carries. Large on purpose: the branch exists to survive only broad
+ * colour regions, and it reuses the frost intermediate rather than re-reading
+ * the backdrop, so the radii compose instead of costing a second full chain.
+ *
+ * EXPERIMENTAL — not an Apple/Figma value.
+ */
+export const GLASS_COLOR_WASH_BLUR = 24;
 
 /**
  * Pinned variant, used when the dev selector is unavailable — a packaged build,
@@ -111,7 +158,7 @@ const GLASS_VARIANT_KEY = "goosic:glass-variant";
 function readGlassVariant(): GlassRendererVariant | null {
   if (!import.meta.env.DEV || typeof window === "undefined") return null;
   const isVariant = (v: string | null): v is GlassRendererVariant =>
-    v === "A" || v === "B" || v === "C" || v === "D";
+    v !== null && Object.prototype.hasOwnProperty.call(GLASS_VARIANTS, v);
   try {
     const requested = new URLSearchParams(window.location.search)
       .get("glass")
@@ -138,11 +185,15 @@ export const GLASS_COLOR_SPACE_MODE: GlassColorSpaceMode =
   GLASS_VARIANTS[GLASS_RENDERER_VARIANT].colorSpace;
 export const GLASS_BEZEL_REFRACTION: boolean =
   GLASS_VARIANTS[GLASS_RENDERER_VARIANT].bezel;
+export const GLASS_REFRACTION_PREBLUR_RATIO: number =
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].preBlur;
+export const GLASS_COLOR_WASH_STRENGTH: number =
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].wash;
 
 if (import.meta.env.DEV && typeof window !== "undefined") {
   // Printed so a screenshot can always be traced back to a configuration.
   console.info(
-    `[glass] variant ${GLASS_RENDERER_VARIANT} — colour space: ${GLASS_COLOR_SPACE_MODE}, bezel refraction: ${GLASS_BEZEL_REFRACTION}`,
+    `[glass] variant ${GLASS_RENDERER_VARIANT} — colour space: ${GLASS_COLOR_SPACE_MODE}, bezel: ${GLASS_BEZEL_REFRACTION}, refraction pre-blur: ${GLASS_REFRACTION_PREBLUR_RATIO}x frost, colour wash: ${GLASS_COLOR_WASH_STRENGTH}`,
   );
 }
 
@@ -533,6 +584,10 @@ function appendFilter(
     GLASS_COLOR_SPACE_MODE === "srgb" ? "sRGB" : "linearRGB";
   const mixSpace = GLASS_COLOR_SPACE_MODE === "full" ? "linearRGB" : "sRGB";
 
+  // When the wash branch is active it owns the final `dispersed` name and the
+  // frost/refraction composite lands in an intermediate instead.
+  const bodyResult = GLASS_COLOR_WASH_STRENGTH > 0 ? "body_mix" : "dispersed";
+
   const blur = svgElement("feGaussianBlur");
   setAttributes(blur, {
     in: "SourceGraphic",
@@ -556,10 +611,28 @@ function appendFilter(
   // (saturation matched so only sharpness differs between the branches).
   const refractionSource = GLASS_BEZEL_REFRACTION ? "raw_source" : "blurred_source";
   if (GLASS_BEZEL_REFRACTION) {
+    // A light low-pass ahead of the lens. Sampling the raw backdrop makes the
+    // bezel read as a sharp copy of the background pasted in; the refraction
+    // should still carry more spatial information than the frost body, but
+    // belong to the same material. Scaled off the frost radius so it tracks
+    // the material rather than being an absolute tuned to one stop.
+    const preBlurAmount = blurLevel * GLASS_REFRACTION_PREBLUR_RATIO;
+    let refractionInput = "SourceGraphic";
+    if (preBlurAmount > 0) {
+      const preBlur = svgElement("feGaussianBlur");
+      setAttributes(preBlur, {
+        in: "SourceGraphic",
+        stdDeviation: preBlurAmount,
+        "color-interpolation-filters": frostSpace,
+        result: "refraction_preblur",
+      });
+      filter.append(preBlur);
+      refractionInput = "refraction_preblur";
+    }
     const rawSaturate = svgElement("feColorMatrix");
     setAttributes(rawSaturate, {
       "color-interpolation-filters": frostSpace,
-      in: "SourceGraphic",
+      in: refractionInput,
       type: "saturate",
       values: saturation,
       result: "raw_source",
@@ -647,7 +720,7 @@ function appendFilter(
     // Named `refracted` when the bezel path owns the recombination below, so
     // everything downstream keeps consuming a single `dispersed` result either
     // way and the two architectures stay swappable.
-    result: GLASS_BEZEL_REFRACTION ? "refracted" : "dispersed",
+    result: GLASS_BEZEL_REFRACTION ? "refracted" : bodyResult,
   });
   filter.append(redGreen, dispersed);
 
@@ -703,9 +776,43 @@ function appendFilter(
       in2: "blurred_source",
       mode: "normal",
       "color-interpolation-filters": mixSpace,
-      result: "dispersed",
+      result: bodyResult,
     });
     filter.append(deviation, toAlpha, shape, edgeOptics, spatial);
+  }
+
+  if (GLASS_COLOR_WASH_STRENGTH > 0) {
+    // Broad background colour bleeding into the surface — the dirty, smoky
+    // character native glass has and a clean blur does not. Reuses the frost
+    // intermediate rather than re-reading the backdrop, so the radii compose
+    // and this costs one more blur rather than a second full chain.
+    const wash = svgElement("feGaussianBlur");
+    setAttributes(wash, {
+      in: "blurred_source",
+      stdDeviation: GLASS_COLOR_WASH_BLUR,
+      "color-interpolation-filters": frostSpace,
+      result: "wash_blur",
+    });
+    const washAlpha = svgElement("feComponentTransfer");
+    setAttributes(washAlpha, { in: "wash_blur", result: "wash" });
+    const washFunc = svgElement("feFuncA");
+    setAttributes(washFunc, {
+      type: "linear",
+      slope: GLASS_COLOR_WASH_STRENGTH / 100,
+    });
+    washAlpha.append(washFunc);
+    // `color` takes hue and saturation from the wash and keeps the body's
+    // luminance. That is the whole point: it contaminates with colour without
+    // laying grey over the surface, which is what washed Windows out before.
+    const contaminated = svgElement("feBlend");
+    setAttributes(contaminated, {
+      in: "wash",
+      in2: bodyResult,
+      mode: "color",
+      "color-interpolation-filters": mixSpace,
+      result: "dispersed",
+    });
+    filter.append(wash, washAlpha, contaminated);
   }
   const specularImage = svgElement("feImage");
   setAttributes(specularImage, {
