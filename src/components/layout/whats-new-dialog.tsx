@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { TriangleAlertIcon } from "lucide-react";
 import {
   Dialog,
@@ -7,6 +8,9 @@ import {
 } from "@/components/ui/dialog";
 import { useReleaseNotes, useWhatsNewStore } from "@/lib/store/whats-new";
 import { resolveWhatsNewEntry } from "@/lib/whats-new-remote";
+import { hasGlassStory } from "@/lib/whats-new-story";
+import { GlassStory } from "@/components/whats-new/glass-story";
+import { GlassStoryCard } from "@/components/whats-new/glass-story-card";
 import { APP_ICON } from "@/lib/branding";
 
 /**
@@ -24,6 +28,57 @@ export function WhatsNewDialog() {
   // release whose body carries no authored notes, and an offline launch.
   const releases = useReleaseNotes();
   const entry = resolveWhatsNewEntry(version, releases);
+  // Releases whose headline is a visual change get a feature story instead of
+  // a change list. The card below is the entry point; opening it hands the
+  // whole screen over, so the dialog steps aside rather than sitting behind.
+  const [storyOpen, setStoryOpen] = useState(false);
+  const story = hasGlassStory(entry?.version);
+
+  // `?story=1` opens the feature story and `?story=card` its entry point.
+  // Reaching either normally means shipping a version bump or walking the
+  // About dialog, too slow a loop for a screen that is almost entirely visual.
+  const [devCard, setDevCard] = useState(false);
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const requested = new URLSearchParams(window.location.search).get("story");
+    if (requested === "1") setStoryOpen(true);
+    else if (requested === "card") setDevCard(true);
+  }, []);
+
+  if (story && entry) {
+    return (
+      <>
+        <Dialog
+          open={(open || devCard) && !storyOpen}
+          onOpenChange={(next) => {
+            setOpen(next);
+            if (!next) {
+              setStoryOpen(false);
+              setDevCard(false);
+            }
+          }}
+        >
+          <DialogContent className="max-w-lg overflow-hidden p-0">
+            <DialogTitle className="sr-only">
+              Liquid Glass, refined.
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              A new material experience for Goosic, in version {entry.version}.
+            </DialogDescription>
+            <GlassStoryCard onOpen={() => setStoryOpen(true)} />
+          </DialogContent>
+        </Dialog>
+        {storyOpen ? (
+          <GlassStory
+            onClose={() => {
+              setStoryOpen(false);
+              setOpen(false);
+            }}
+          />
+        ) : null}
+      </>
+    );
+  }
 
   return (
     <Dialog open={open && !!entry} onOpenChange={setOpen}>

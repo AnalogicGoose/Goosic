@@ -352,7 +352,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     sheen: 20,
     frameTint: 140,
     grain: 0,
-    lens: { refraction: 70, depth: 30, dispersion: 20, splay: 20 },
+    lens: { refraction: 70, depth: 40, dispersion: 20, splay: 20 },
   },
   "glass-subdued": {
     frost: 14,

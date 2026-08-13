@@ -38,6 +38,45 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.7.0",
+    date: "August 2026",
+    sections: [
+      {
+        heading: "Liquid Glass, refined",
+        items: [
+          "Glass now takes far more of its colour and tone from the artwork behind it instead of settling into a flat grey, so a surface over a bright cover actually looks like it is sitting on that cover.",
+          "Edges pick up light from whatever passes beneath them, and the highlight along the rim stays a separate, thinner line rather than washing the whole boundary out.",
+          "Open What's New on this release for a short walkthrough of the new material, rendered live rather than as screenshots.",
+        ],
+      },
+      {
+        heading: "A quieter, more native shell",
+        items: [
+          "The sidebar is a proper source list now. Content scrolls underneath it instead of stopping at its edge, and carousels bleed past it the way they do on macOS.",
+          "The player bar stays docked at the bottom on every screen, and no longer drifts behind the sidebar when the window is resized.",
+          "The title bar menu moved into Settings, so the window chrome stays out of the way.",
+        ],
+      },
+      {
+        heading: "Search",
+        items: [
+          "Search suggestions from YouTube Music appear as you type, including direct matches for songs, albums, and artists.",
+          "Typing no longer fires a search on every keystroke. Results load when you press Enter or pick a suggestion.",
+          "The Search tab opens on a browsable landing view instead of an empty page.",
+        ],
+      },
+      {
+        heading: "Playback and sign-in fixes",
+        items: [
+          "Fixed the wrong track playing for a moment before the correct one started, which mostly showed up on Windows when skipping through a queue.",
+          "Fixed a track occasionally restarting from the beginning on macOS before continuing normally.",
+          "The macOS keychain prompt no longer appears repeatedly during a session.",
+          "Switching between accounts no longer risks signing you out of the one you just left.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.6.0",
     date: "August 2026",
     sections: [

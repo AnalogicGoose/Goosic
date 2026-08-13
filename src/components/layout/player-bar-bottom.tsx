@@ -65,8 +65,15 @@ import { getVisualTheme } from "@/lib/themes";
  */
 export function PlayerBarBottom({
   onCoverActivate,
+  presentation = false,
 }: {
   onCoverActivate?: () => void;
+  /**
+   * Rendered as a showcase of the surface rather than as the live transport.
+   * Suppresses the playback error banner, which is transient app state and
+   * has nothing to say about the material being demonstrated.
+   */
+  presentation?: boolean;
 }) {
   const {
     playing,
@@ -277,7 +284,7 @@ export function PlayerBarBottom({
   );
 
   const errorBanner =
-    status === "error" && error ? (
+    status === "error" && error && !presentation ? (
       <div className="absolute -top-9 left-3 right-3 truncate rounded-md bg-destructive/90 px-3 py-1 text-xs text-destructive-foreground shadow">
         Playback error: {error}
       </div>
