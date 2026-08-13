@@ -44,7 +44,6 @@ export const FIGMA_GLASS_PRESET = {
  * result, so it is a deliberate switch rather than a default.
  */
 export type GlassColorSpaceMode = "srgb" | "frost" | "full";
-export const GLASS_COLOR_SPACE_MODE: GlassColorSpaceMode = "srgb";
 
 /**
  * Refraction reads the *unblurred* backdrop and is confined to the bezel.
@@ -59,7 +58,93 @@ export const GLASS_COLOR_SPACE_MODE: GlassColorSpaceMode = "srgb";
  * bezel, giving centre = frost, bezel = frost + refraction, extreme edge =
  * strongest displacement and chromatic separation.
  */
-export const GLASS_BEZEL_REFRACTION = false;
+
+/* -------------------------------------------------------------------------- */
+/* Renderer variant selector                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The four renderer configurations under comparison. One switch, so a variant
+ * can be changed in a single place instead of keeping two flags in sync.
+ *
+ *   A  production baseline — sRGB, refraction bends the already-frosted texture
+ *   B  frost-only linearRGB — blur and its saturation in linear light
+ *   C  full linearRGB + bezel-masked refraction of the raw backdrop
+ *   D  sRGB + bezel-masked refraction — isolates architecture from colour space
+ *
+ * B and D exist to separate the two contributions: if C wins, D says whether it
+ * was the pass architecture and B says whether it was the colour space.
+ */
+export type GlassRendererVariant = "A" | "B" | "C" | "D";
+
+const GLASS_VARIANTS: Record<
+  GlassRendererVariant,
+  { colorSpace: GlassColorSpaceMode; bezel: boolean }
+> = {
+  A: { colorSpace: "srgb", bezel: false },
+  B: { colorSpace: "frost", bezel: false },
+  C: { colorSpace: "full", bezel: true },
+  D: { colorSpace: "srgb", bezel: true },
+};
+
+/**
+ * Pinned variant, used when the dev selector is unavailable — a packaged build,
+ * or any non-DEV bundle. Edit this one line to bake a variant into a release.
+ */
+const GLASS_VARIANT_DEFAULT: GlassRendererVariant = "A";
+
+const GLASS_VARIANT_KEY = "goosic:glass-variant";
+
+/**
+ * Dev-only runtime override, mirroring the platform override in
+ * `src/lib/platform.ts`. Switching renderers by editing source means a rebuild,
+ * and HMR does not reliably rebuild glass filters, so the comparison is driven
+ * by URL instead:
+ *
+ *   ?glass=C     select and persist a variant
+ *   ?glass=auto  clear the override
+ *
+ * The choice persists in localStorage, so every subsequent reload keeps it and
+ * the URL itself records which variant produced a screenshot. Never consulted
+ * in a production build.
+ */
+function readGlassVariant(): GlassRendererVariant | null {
+  if (!import.meta.env.DEV || typeof window === "undefined") return null;
+  const isVariant = (v: string | null): v is GlassRendererVariant =>
+    v === "A" || v === "B" || v === "C" || v === "D";
+  try {
+    const requested = new URLSearchParams(window.location.search)
+      .get("glass")
+      ?.toUpperCase();
+    if (requested === "AUTO") {
+      window.localStorage.removeItem(GLASS_VARIANT_KEY);
+      return null;
+    }
+    if (isVariant(requested ?? null)) {
+      window.localStorage.setItem(GLASS_VARIANT_KEY, requested as string);
+      return requested as GlassRendererVariant;
+    }
+    const stored = window.localStorage.getItem(GLASS_VARIANT_KEY);
+    return isVariant(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+export const GLASS_RENDERER_VARIANT: GlassRendererVariant =
+  readGlassVariant() ?? GLASS_VARIANT_DEFAULT;
+
+export const GLASS_COLOR_SPACE_MODE: GlassColorSpaceMode =
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].colorSpace;
+export const GLASS_BEZEL_REFRACTION: boolean =
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].bezel;
+
+if (import.meta.env.DEV && typeof window !== "undefined") {
+  // Printed so a screenshot can always be traced back to a configuration.
+  console.info(
+    `[glass] variant ${GLASS_RENDERER_VARIANT} — colour space: ${GLASS_COLOR_SPACE_MODE}, bezel refraction: ${GLASS_BEZEL_REFRACTION}`,
+  );
+}
 
 /**
  * Hardening curve applied to the bezel mask.
@@ -956,7 +1041,7 @@ export function LiquidGlassDefs() {
       const lensKey = material.lens
         ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
         : "none";
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}c${GLASS_COLOR_SPACE_MODE}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 
