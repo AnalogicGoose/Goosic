@@ -1,54 +1,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
-import { getVersion } from "@tauri-apps/api/app";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import {
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  MoreHorizontalIcon,
-  SettingsIcon,
-  LayoutDashboardIcon,
-  PanelRightIcon,
-  PanelBottomIcon,
-  ExternalLinkIcon,
-  BugIcon,
-  DownloadIcon,
-  InfoIcon,
-  PowerIcon,
-} from "lucide-react";
-import { toast } from "sonner";
+import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { INTERACTIVE_GLASS_CONTROL_CLASS } from "@/components/ui/glass-surface";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { useLayoutStore, type LayoutMode } from "@/lib/store/layout";
 import { isMacOSWebview } from "@/lib/platform";
 import { cn } from "@/lib/utils";
-import { openSettings } from "@/lib/store/settings-dialog";
-import { checkForUpdates } from "@/lib/updater";
-import { AboutDialog } from "@/components/layout/about-dialog";
 
 // Caption-bar nav buttons. These stay flat (`ghost`): the material belongs to
 // the frame around them, so giving each button its own would stack glass on
@@ -57,11 +15,10 @@ const NAV_BTN_CLS =
   "size-7 rounded-full text-foreground/70 transition-transform duration-150 ease-out hover:text-foreground active:scale-95";
 
 /**
- * The caption-bar controls read as one grouped frame rather than four loose
- * icons, the way a system toolbar groups paired actions. The seam splits the
- * two jobs in the cluster -- app menu + sidebar on one side, history
- * navigation on the other -- so the grouping carries meaning instead of just
- * boxing things in.
+ * The caption-bar controls read as one grouped frame rather than loose icons,
+ * the way a system toolbar groups paired actions. The seam splits the two jobs
+ * in the cluster -- the sidebar toggle on one side, history navigation on the
+ * other -- so the grouping carries meaning instead of just boxing things in.
  */
 const NAV_SEAM_CLS = "mx-0.5 my-1.5 w-px self-stretch bg-foreground/15";
 
@@ -81,15 +38,13 @@ const USES_NATIVE_MACOS_TITLEBAR = IS_TAURI && isMacOSWebview();
  *
  * Both AppKit's native close control and Goosic's custom close button go
  * through the Rust `WindowEvent::CloseRequested` handler, which either hides
- * the window into the tray (default) or quits, per the "Close button" choice
- * on the Settings page. The "Quit" item in the More menu always terminates the
- * process regardless of that setting.
+ * the window into the tray (default) or quits, per the "Close to tray" choice
+ * in Settings. "Quit Goosic" there, and the tray's own Quit item, always
+ * terminate the process regardless of that setting.
  */
 export function TopBar() {
   const router = useRouter();
   const [maximized, setMaximized] = useState(false);
-  const [reportOpen, setReportOpen] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
 
   useEffect(() => {
     if (!IS_TAURI || USES_NATIVE_MACOS_TITLEBAR) return;
@@ -135,56 +90,6 @@ export function TopBar() {
             USES_NATIVE_MACOS_TITLEBAR && "ml-[76px]",
           )}
         >
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className={NAV_BTN_CLS}
-                aria-label="More"
-              >
-                <MoreHorizontalIcon />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuItem onSelect={() => openSettings()}>
-                <SettingsIcon />
-                Settings
-              </DropdownMenuItem>
-              <LayoutSubMenu />
-
-              <DropdownMenuSeparator />
-
-              <DropdownMenuItem onSelect={() => setReportOpen(true)}>
-                <BugIcon />
-                Report Issue
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() => {
-                  void checkForUpdates({ silent: false });
-                }}
-              >
-                <DownloadIcon />
-                Check for Updates
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setAboutOpen(true)}>
-                <InfoIcon />
-                About
-              </DropdownMenuItem>
-
-              <DropdownMenuSeparator />
-
-              <DropdownMenuItem
-                onSelect={() => {
-                  void invoke("quit_app");
-                }}
-              >
-                <PowerIcon />
-                Quit
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
           <SidebarTrigger className={NAV_BTN_CLS} />
 
           <span aria-hidden className={NAV_SEAM_CLS} />
@@ -242,133 +147,7 @@ export function TopBar() {
           </div>
         )}
       </header>
-
-      <ReportIssueDialog open={reportOpen} onOpenChange={setReportOpen} />
-      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </>
-  );
-}
-
-function LayoutSubMenu() {
-  const mode = useLayoutStore((s) => s.mode);
-  const setMode = useLayoutStore((s) => s.setMode);
-  return (
-    <DropdownMenuSub>
-      <DropdownMenuSubTrigger>
-        <LayoutDashboardIcon />
-        Layout
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="w-44">
-        <DropdownMenuRadioGroup
-          value={mode}
-          onValueChange={(v) => setMode(v as LayoutMode)}
-        >
-          <DropdownMenuRadioItem value="right">
-            <PanelRightIcon className="size-4" />
-            Side card
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="bottom">
-            <PanelBottomIcon className="size-4" />
-            Bottom bar
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="floating">
-            <ExternalLinkIcon className="size-4" />
-            Floating window
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-      </DropdownMenuSubContent>
-    </DropdownMenuSub>
-  );
-}
-
-const REPO_ISSUES_URL = "https://github.com/AnalogicGoose/Goosic/issues/new";
-
-/**
- * Feedback form that hands off to GitHub: Submit opens a prefilled
- * new-issue page in the default browser with the app version and OS
- * appended, so reports arrive with the diagnostics we always ask for.
- * Voting/discussion happens on GitHub — no backend of our own.
- */
-function ReportIssueDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-
-  useEffect(() => {
-    if (!open) {
-      setTitle("");
-      setBody("");
-    }
-  }, [open]);
-
-  const submit = async () => {
-    if (!body.trim()) return;
-    let version = "unknown";
-    try {
-      version = await getVersion();
-    } catch {
-      /* non-Tauri context (plain vite dev) — keep "unknown" */
-    }
-    const fullBody = [
-      body.trim(),
-      "",
-      "---",
-      `App version: ${version}`,
-      `OS: ${navigator.userAgent}`,
-    ].join("\n");
-    const params = new URLSearchParams({ body: fullBody });
-    if (title.trim()) params.set("title", title.trim());
-    try {
-      await openUrl(`${REPO_ISSUES_URL}?${params}`);
-      toast.success("Thanks! Finish submitting the issue in your browser.");
-      onOpenChange(false);
-    } catch (e) {
-      toast.error("Couldn't open the browser", { description: String(e) });
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Report an issue</DialogTitle>
-          <DialogDescription>
-            Tell us what went wrong or what you'd like to see. Submitting opens
-            a prefilled GitHub issue in your browser — app version and OS are
-            attached automatically.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex flex-col gap-3">
-          <Input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Short summary (optional)"
-          />
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="What happened? Steps to reproduce, expected vs actual…"
-            rows={6}
-            className="w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
-          />
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button onClick={() => void submit()} disabled={!body.trim()}>
-            Submit
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 

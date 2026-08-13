@@ -6,10 +6,13 @@ import { getVersion } from "@tauri-apps/api/app";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   BellIcon,
+  BugIcon,
   FileTextIcon,
+  HeartIcon,
   InfoIcon,
   Loader2Icon,
   LogInIcon,
+  PowerIcon,
   RadioIcon,
   RocketIcon,
   UserRoundIcon,
@@ -26,6 +29,8 @@ import { startLogin } from "@/lib/login";
 import { checkForUpdates } from "@/lib/updater";
 import { APP_NAME } from "@/lib/branding";
 import { formatDiagnostics } from "@/lib/playback-diagnostics";
+import { AboutDialog } from "@/components/layout/about-dialog";
+import { ReportIssueDialog } from "@/components/layout/report-issue-dialog";
 
 export function GeneralTab() {
   return (
@@ -200,6 +205,25 @@ function BehaviorGroup() {
           />
         }
       />
+      {/* Sits directly under "Close to tray" because it is that setting's
+          escape hatch: with tray-on-close enabled, ✕ no longer ends the
+          process and this always does. The tray icon offers the same action. */}
+      <SettingRow
+        icon={PowerIcon}
+        title="Quit Goosic"
+        description="Stop playback and close the app completely, even when closing to the tray is on."
+        control={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void invoke("quit_app");
+            }}
+          >
+            Quit
+          </Button>
+        }
+      />
     </Group>
   );
 }
@@ -212,6 +236,10 @@ function AboutGroup() {
   // The installed version, read from the Tauri manifest rather than a
   // bundled constant, so it always matches the build the user is running.
   const [version, setVersion] = useState("");
+  // Both dialogs used to be owned by the title bar's More menu. They live here
+  // now that Settings is the only place either is reached from.
+  const [reportOpen, setReportOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -290,6 +318,31 @@ function AboutGroup() {
           </Button>
         }
       />
+      {/* Directly after the log row: saving the log is the step that makes a
+          report useful, so the two read as one flow. */}
+      <SettingRow
+        icon={BugIcon}
+        title="Report an issue"
+        description="Tell us what went wrong or what you'd like to see. Opens a prefilled GitHub issue in your browser."
+        control={
+          <Button variant="outline" size="sm" onClick={() => setReportOpen(true)}>
+            Report
+          </Button>
+        }
+      />
+      <SettingRow
+        icon={HeartIcon}
+        title="About"
+        description={`Credits, licence and links for ${APP_NAME}.`}
+        control={
+          <Button variant="outline" size="sm" onClick={() => setAboutOpen(true)}>
+            About
+          </Button>
+        }
+      />
+
+      <ReportIssueDialog open={reportOpen} onOpenChange={setReportOpen} />
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </Group>
   );
 }
