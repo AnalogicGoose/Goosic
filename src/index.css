@@ -106,12 +106,23 @@ html.liquid-refract .liquid-glass-player::after {
 }
 
 html body [data-slot="sidebar-container"] {
-  top: var(--titlebar-h);
-  height: calc(100svh - var(--titlebar-h));
+  /* Full height, meeting the top of the window the way a macOS source list
+     does — the traffic lights sit over the panel rather than above it, and
+     SidebarContent pads itself clear of them. */
+  top: 0;
+  height: 100svh;
   /* The content column is `relative z-10` and comes later in the DOM, so
      without this the page would paint over the glass instead of sliding
      beneath it. */
   z-index: 20;
+}
+
+/* A flush source list, not a floating card. This has to carry `!important`
+   to beat the global 32px glass radius, which is itself `!important` so that
+   Tailwind's radius utilities cannot override the Figma geometry. */
+html.liquid-refract .glass-material.sidebar-flush:not(.glass-material-small),
+html body .sidebar-flush {
+  border-radius: 0 !important;
 }
 
 /* The sidebar is a translucent overlay, not a column. Collapsing the layout
@@ -331,9 +342,11 @@ html body [data-slot="sidebar-gap"] {
      sidebar's logo header doesn't overlap the window-control strip.
      The sidebar component itself uses `fixed inset-y-0`, which we
      can't easily override via the React API. */
+  /* Superseded by the flush full-height rule outside the layers, which wins on
+     specificity. Kept only so the offset is not silently reintroduced here. */
   [data-slot="sidebar-container"] {
-    top: var(--titlebar-h);
-    height: calc(100svh - var(--titlebar-h));
+    top: 0;
+    height: 100svh;
   }
 
   /* A carousel's scroll box deliberately extends under the sidebar (and, in

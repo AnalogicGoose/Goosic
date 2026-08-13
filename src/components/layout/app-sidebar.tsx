@@ -31,13 +31,11 @@ import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -74,7 +72,6 @@ import {
 } from "@/lib/store/accounts";
 import { cn } from "@/lib/utils";
 import { startLogin } from "@/lib/login";
-import { APP_ICON, APP_NAME } from "@/lib/branding";
 import { GLASS_SURFACE_CLASS } from "@/components/ui/glass-surface";
 
 const NAV_ITEMS = [
@@ -89,7 +86,11 @@ const NAV_ITEMS = [
 // section, not user-removable.
 const LIKED_ID = "VLLM";
 
-const MENU_BTN_CLS = "group-data-[collapsible=icon]:mx-auto";
+// Apple Music's source list is denser than shadcn's default: ~28px rows with
+// 13px labels rather than 32px/14px. The icon sizing is pinned too, since the
+// smaller row would otherwise leave lucide's 16px glyphs looking oversized.
+const MENU_BTN_CLS =
+  "h-7 gap-2.5 text-[13px] [&>svg]:size-4 group-data-[collapsible=icon]:mx-auto";
 
 export function AppSidebar() {
   const { location } = useRouterState();
@@ -99,26 +100,20 @@ export function AppSidebar() {
 
   return (
     <Sidebar
-      variant="floating"
+      variant="sidebar"
       collapsible="icon"
-      innerClassName={GLASS_SURFACE_CLASS}
-      className="px-2 pb-2 pt-0 duration-300 ease-out [&>[data-slot=sidebar-inner]]:rounded-[34px] [&>[data-slot=sidebar-inner]]:shadow-none"
+      innerClassName={cn(GLASS_SURFACE_CLASS, "sidebar-flush")}
+      className="duration-300 ease-out"
     >
-      <SidebarHeader className="flex-row items-center gap-2 px-4 pt-[18px] pb-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-2">
-        {/* Single round logo. In expanded mode it sits at px-4 to line
-         *  up with menu icons (which are at group-p-2 + button-p-2 =
-         *  16px). In collapsed mode the row centers it like the
-         *  centered menu icons below. */}
-        <img src={APP_ICON} alt={APP_NAME} className="size-7 shrink-0" />
-        <span className="text-xl font-semibold leading-none tracking-tight transition-opacity duration-200 group-data-[collapsible=icon]:hidden">
-          {APP_NAME}
-        </span>
-      </SidebarHeader>
+      {/* No logo header: macOS sidebars start straight into their content, and
+          the app's identity is the window itself. The traffic lights sit over
+          the top of this panel, so the first group is padded clear of them
+          rather than the whole panel being pushed down. */}
 
       {/* The content column itself doesn't scroll: Browse stays pinned
           (shrink-0) and only the Playlists list scrolls, so the top nav
           never slides out of view when the library is long. */}
-      <SidebarContent className="gap-0 overflow-hidden">
+      <SidebarContent className="gap-0 overflow-hidden pt-(--titlebar-h)">
         <SidebarGroup className="shrink-0 py-1">
           <SidebarGroupLabel>Browse</SidebarGroupLabel>
           <SidebarGroupContent>
@@ -537,33 +532,32 @@ function UserProfile() {
       <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
+            {/* The account row is the one place the source list breaks its own
+                density: macOS gives the signed-in identity a full-size round
+                avatar and a slightly larger label, which is what makes it read
+                as the account rather than one more navigation row. */}
             <SidebarMenuButton
               tooltip={email ? `${name} (${email})` : name}
-              className={MENU_BTN_CLS}
+              className="h-10 gap-2.5 text-[13px] group-data-[collapsible=icon]:mx-auto"
             >
-              <Avatar className="size-4 shrink-0">
+              <Avatar className="size-6 shrink-0">
                 {photoUrl ? <AvatarImage src={photoUrl} alt={name} /> : null}
-                <AvatarFallback className="text-[9px] leading-none">
+                <AvatarFallback className="text-[10px] leading-none">
                   {initial}
                 </AvatarFallback>
               </Avatar>
-              <span className="truncate">{name}</span>
+              <span className="truncate font-medium">{name}</span>
               {/* The tier badge is a claim about the live session; with
                   only stored meta (dead session fallback) it would say
-                  "Free" about an account we can't actually see. */}
-              {live ? (
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    "ms-auto h-4 px-1.5 text-[10px] font-semibold uppercase tracking-wide",
-                    "group-data-[collapsible=icon]:hidden",
-                    isPremium
-                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                      : "text-muted-foreground",
-                  )}
-                >
-                  {tierLabel}
-                </Badge>
+                  "Free" about an account we can't actually see. Premium is
+                  worth a quiet dot rather than a pill — the label repeated the
+                  emphasis the avatar already carries. */}
+              {live && isPremium ? (
+                <span
+                  aria-label={tierLabel}
+                  title={tierLabel}
+                  className="ms-auto size-1.5 shrink-0 rounded-full bg-emerald-500 group-data-[collapsible=icon]:hidden"
+                />
               ) : null}
             </SidebarMenuButton>
           </DropdownMenuTrigger>

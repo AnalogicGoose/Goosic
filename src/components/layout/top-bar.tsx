@@ -1,26 +1,6 @@
 import { useEffect, useState } from "react";
-import { useRouter } from "@tanstack/react-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArrowLeftIcon, ArrowRightIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { INTERACTIVE_GLASS_CONTROL_CLASS } from "@/components/ui/glass-surface";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { isMacOSWebview } from "@/lib/platform";
-import { cn } from "@/lib/utils";
-
-// Caption-bar nav buttons. These stay flat (`ghost`): the material belongs to
-// the frame around them, so giving each button its own would stack glass on
-// glass. `rounded-full` keeps hover/press states concentric with that frame.
-const NAV_BTN_CLS =
-  "size-7 rounded-full text-foreground/70 transition-transform duration-150 ease-out hover:text-foreground active:scale-95";
-
-/**
- * The caption-bar controls read as one grouped frame rather than loose icons,
- * the way a system toolbar groups paired actions. The seam splits the two jobs
- * in the cluster -- the sidebar toggle on one side, history navigation on the
- * other -- so the grouping carries meaning instead of just boxing things in.
- */
-const NAV_SEAM_CLS = "mx-0.5 my-1.5 w-px self-stretch bg-foreground/15";
 
 // Plain-vite dev in a regular browser has no Tauri backend —
 // `getCurrentWindow()` throws on missing `__TAURI_INTERNALS__`, which
@@ -33,8 +13,10 @@ const USES_NATIVE_MACOS_TITLEBAR = IS_TAURI && isMacOSWebview();
 /**
  * Cross-platform title bar. Windows and Linux keep Goosic's custom caption
  * buttons, while macOS uses Tauri's native overlay title bar so AppKit owns
- * the real traffic lights. The shared HTML strip still supplies navigation
- * and a drag region on every platform.
+ * the real traffic lights. The shared HTML strip supplies the drag region on
+ * every platform and holds nothing else: history navigation and the sidebar
+ * toggle were removed with the More menu. The sidebar still collapses with
+ * ⌘/Ctrl+B, which `SidebarProvider` binds.
  *
  * Both AppKit's native close control and Goosic's custom close button go
  * through the Rust `WindowEvent::CloseRequested` handler, which either hides
@@ -43,7 +25,6 @@ const USES_NATIVE_MACOS_TITLEBAR = IS_TAURI && isMacOSWebview();
  * terminate the process regardless of that setting.
  */
 export function TopBar() {
-  const router = useRouter();
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -78,44 +59,22 @@ export function TopBar() {
 
   return (
     <>
+      {/* Overlaid rather than in flex flow. Holding a row in the column left a
+          36px band of window background above the content — the "black bar"
+          once the buttons were gone. As an overlay the page runs to the top of
+          the window and scrolls beneath this strip.
+
+          It cannot simply be deleted: `decorations: false` means the window is
+          frameless, so `data-tauri-drag-region` is the only thing that can move
+          it. The cost is that the top 36px drags instead of clicking through,
+          which is how a frameless title bar behaves anyway. */}
       <header
         data-tauri-drag-region
-        className="relative z-30 flex h-9 shrink-0 select-none items-center"
+        className="absolute inset-x-0 top-0 z-30 flex h-(--titlebar-h) select-none items-center"
       >
-        <div
-          className={cn(
-            INTERACTIVE_GLASS_CONTROL_CLASS,
-            "glass-button ml-2 flex items-center rounded-full p-0.5",
-            // Clear AppKit's traffic lights when it owns the title bar.
-            USES_NATIVE_MACOS_TITLEBAR && "ml-[76px]",
-          )}
-        >
-          <SidebarTrigger className={NAV_BTN_CLS} />
-
-          <span aria-hidden className={NAV_SEAM_CLS} />
-
-          <Button
-            variant="ghost"
-            size="icon"
-            className={NAV_BTN_CLS}
-            onClick={() => router.history.back()}
-            aria-label="Back"
-          >
-            <ArrowLeftIcon />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={NAV_BTN_CLS}
-            onClick={() => router.history.forward()}
-            aria-label="Forward"
-          >
-            <ArrowRightIcon />
-          </Button>
-        </div>
-
-        {/* Drag spacer — fills remaining width so the user can grab
-            almost anywhere in the bar to move the window. */}
+        {/* Nothing but a drag region now. The sidebar runs to the top of the
+            window behind this strip, so the user can grab anywhere along it to
+            move the window without the sidebar swallowing the gesture. */}
         <div data-tauri-drag-region className="h-full flex-1" />
 
         {!USES_NATIVE_MACOS_TITLEBAR && (
