@@ -292,11 +292,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                   // content sits beside the sidebar while a carousel bleeding
                   // left survives all the way under the glass.
                   "pl-(--shell-inset)",
-                  // The title bar overlays this scroller rather than sitting
-                  // above it, so leading space keeps the first heading clear of
-                  // the search field at rest while everything still scrolls
-                  // underneath — which is the point of overlaying it.
-                  "pt-(--titlebar-h)",
                   // The bottom player floats above this scroller. Keep enough
                   // trailing space for the final row to clear the overlay.
                   mode === "bottom" && hasTrack && "pb-[7.5rem]",

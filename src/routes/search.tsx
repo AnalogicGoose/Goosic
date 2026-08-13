@@ -31,6 +31,7 @@ import { TrackList } from "@/components/shared/track-list";
 import { Thumbnail } from "@/components/shared/thumbnail";
 import { TrackContextMenu } from "@/components/shared/track-context-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SearchField } from "@/components/layout/search-field";
 import { useSearchHistory } from "@/lib/store/search-history";
 import { usePlaybackStore } from "@/lib/store/playback";
 import { openSettings } from "@/lib/store/settings-dialog";
@@ -115,6 +116,7 @@ function SearchPage() {
       </div>
 
       <div className="flex flex-col gap-3">
+        <SearchField filter={filter} urlQ={q} className="w-full" />
         <div className="flex items-center gap-3">
           {scope === "catalog" ? (
             <FilterBar filter={filter} />

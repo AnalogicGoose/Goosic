@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { HistoryIcon, SearchIcon, XIcon } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { useSearchHistory } from "@/lib/store/search-history";
 import type { SearchFilter } from "@/lib/innertube/search";
 import { cn } from "@/lib/utils";
@@ -18,28 +19,22 @@ function useDebounced<T>(value: T, ms = 300): T {
 }
 
 /**
- * The app's one search field, living in the title bar so it is reachable from
- * every page. It previously sat on /search, which meant search was only
- * available once you were already there.
+ * The Search page's input, with its history dropdown.
  *
- * It reads the current route rather than taking the query as a prop, because it
- * now outlives any single page: on /search it stays in step with the URL in
- * both directions, and everywhere else it is simply a way in.
+ * Deliberately scoped to that page rather than living in the title bar: search
+ * is a place you go, not a control that follows you around. It lives in its own
+ * file only because it is large enough to crowd the route otherwise.
  */
-export function SearchField({ className }: { className?: string }) {
+export function SearchField({
+  filter,
+  urlQ,
+  className,
+}: {
+  filter: SearchFilter;
+  urlQ: string;
+  className?: string;
+}) {
   const navigate = useNavigate();
-  const location = useRouterState({ select: (s) => s.location });
-
-  const onSearchRoute = location.pathname === "/search";
-  const routeSearch = location.search as {
-    q?: string;
-    filter?: SearchFilter;
-  };
-  // Off /search there is no query to mirror, so the field reads as empty.
-  const urlQ = onSearchRoute ? (routeSearch.q ?? "") : "";
-  const filter: SearchFilter = onSearchRoute
-    ? (routeSearch.filter ?? "all")
-    : "all";
 
   const [value, setValue] = useState(urlQ);
   const debounced = useDebounced(value, 300);
@@ -49,37 +44,36 @@ export function SearchField({ className }: { className?: string }) {
   const pushHistory = useSearchHistory((s) => s.push);
   const clearHistory = useSearchHistory((s) => s.clear);
 
-  // External URL changes flow into the input (clicking a history entry,
-  // hitting Back, or navigating away from /search, which empties it).
+  // External URL changes flow into the input (e.g. clicking a history
+  // entry that calls navigate, or hitting Back).
   useEffect(() => {
     setValue(urlQ);
     userTypedRef.current = false;
   }, [urlQ]);
 
-  // While on /search, mirror typing into the URL so results follow along.
-  // Deliberately gated on being there already: doing it from anywhere else
-  // would throw the user off the page they are on at the first keystroke.
+  // As the user types, mirror the value into the URL so the route re-runs the
+  // search query. Replace history while staying on /search so Back returns to
+  // whatever page got the user here, not every keystroke.
   useEffect(() => {
-    if (!userTypedRef.current || !onSearchRoute) return;
+    if (!userTypedRef.current) return;
     if (debounced === urlQ) return;
     navigate({
       to: "/search",
       search: { q: debounced || undefined, filter },
       replace: true,
     });
-  }, [debounced, urlQ, filter, navigate, onSearchRoute]);
+  }, [debounced, urlQ, filter, navigate]);
 
   const [focused, setFocused] = useState(false);
   const [activeIdx, setActiveIdx] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Arriving at Search from the sidebar should drop the user straight into
-  // typing — but only then. Focusing on every mount would steal the caret on
-  // app launch and on every page change.
+  // Auto-focus whenever the route mounts, so opening Search from the sidebar
+  // drops the user straight into typing.
   useEffect(() => {
-    if (onSearchRoute) inputRef.current?.focus();
-  }, [onSearchRoute]);
+    inputRef.current?.focus();
+  }, []);
 
   const suggestions = useMemo(() => {
     const q = value.trim().toLowerCase();
@@ -110,29 +104,14 @@ export function SearchField({ className }: { className?: string }) {
     userTypedRef.current = true;
     setValue("");
     inputRef.current?.focus();
-    // Only touch the URL when it is ours to touch.
-    if (onSearchRoute) {
-      navigate({
-        to: "/search",
-        search: { q: undefined, filter },
-        replace: true,
-      });
-    }
+    navigate({
+      to: "/search",
+      search: { q: undefined, filter },
+      replace: true,
+    });
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      // Explicit rather than relying on the form's implicit submission, which
-      // needs a submit button or exactly one text field to be dependable
-      // across the three WebViews Goosic ships on.
-      e.preventDefault();
-      submitQuery(
-        activeIdx >= 0 && suggestions[activeIdx]
-          ? suggestions[activeIdx]
-          : value,
-      );
-      return;
-    }
     if (e.key === "Escape") {
       if (value) {
         clear();
@@ -157,19 +136,20 @@ export function SearchField({ className }: { className?: string }) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          submitQuery(
-            activeIdx >= 0 && suggestions[activeIdx]
-              ? suggestions[activeIdx]
-              : value,
-          );
+          if (activeIdx >= 0 && suggestions[activeIdx]) {
+            submitQuery(suggestions[activeIdx]);
+          } else {
+            submitQuery(value);
+          }
         }}
       >
-        <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        <input
+        <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
           ref={inputRef}
-          type="text"
-          placeholder="Search"
-          aria-label="Search"
+          placeholder="Search songs, albums, artists…"
+          // A pill rather than a rounded rectangle: this is the page's primary
+          // control, and the shape matches the scope toggle beside it.
+          className="h-10 rounded-full pl-10 pr-10"
           value={value}
           onChange={(e) => {
             userTypedRef.current = true;
@@ -182,21 +162,15 @@ export function SearchField({ className }: { className?: string }) {
             setFocused(false);
           }}
           onKeyDown={onKeyDown}
-          className={cn(
-            "h-6.5 w-full rounded-full border border-transparent bg-foreground/8 pl-8.5 pr-8 text-[13px] outline-none",
-            "placeholder:text-muted-foreground",
-            "transition-colors duration-150 hover:bg-foreground/12",
-            "focus:border-foreground/20 focus:bg-foreground/15",
-          )}
         />
         {value ? (
           <button
             type="button"
             aria-label="Clear search"
             onClick={clear}
-            className="absolute right-1.5 top-1/2 flex size-4.5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/15 hover:text-foreground"
+            className="absolute right-2 top-1/2 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
-            <XIcon className="size-3" />
+            <XIcon className="size-4" />
           </button>
         ) : null}
       </form>
@@ -204,7 +178,7 @@ export function SearchField({ className }: { className?: string }) {
       {showDropdown && (
         <div
           onMouseDown={(e) => e.preventDefault()}
-          className="absolute left-0 right-0 top-full z-50 mt-1.5 overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-md"
+          className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md"
         >
           <ul className="py-1">
             {suggestions.map((h, i) => (
@@ -212,13 +186,13 @@ export function SearchField({ className }: { className?: string }) {
                 <button
                   type="button"
                   className={cn(
-                    "flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-[13px]",
+                    "flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm",
                     i === activeIdx ? "bg-accent" : "hover:bg-accent",
                   )}
                   onClick={() => submitQuery(h)}
                   onMouseEnter={() => setActiveIdx(i)}
                 >
-                  <HistoryIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                  <HistoryIcon className="size-4 shrink-0 text-muted-foreground" />
                   <span className="truncate">{h}</span>
                 </button>
               </li>
