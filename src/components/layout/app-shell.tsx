@@ -105,10 +105,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   // continuously-animating blur stack stops burning GPU while the app
   // plays in the background. Remounts (with its own fade-in) on restore.
   const windowHidden = useWindowHidden();
-  // The player UI is hidden whenever there's no active track —
-  // covers the "Nothing playing" empty state at first launch and
-  // after the queue is cleared. The mode itself stays the same; the
-  // player just reappears in the chosen slot once a track is loaded.
+  // Gates the side card and the floating window, which are hidden with no
+  // active track — at first launch and after the queue is cleared. The mode
+  // itself stays the same; the player reappears in its slot once a track
+  // loads. The bottom bar is deliberately not gated on this: it stays docked
+  // and shows its own "Nothing playing" state.
   const hasTrack = usePlaybackStore(
     (s) => s.index >= 0 && s.index < s.queue.length,
   );
@@ -238,10 +239,16 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="relative flex min-h-0 flex-1">
             <AppSidebar />
             {/* The right player overlays the page instead of reserving a
-                floating player card — but only when a track is
-                actually loaded; the empty state shouldn't carve out
-                dead space. `bottom` and `floating` follow the same
-                "hide when no track" rule. */}
+                floating player card — but only when a track is actually
+                loaded; an empty side card would carve out dead space, and
+                `floating` would spawn a window with nothing in it.
+
+                `bottom` is the exception: it stays docked with or without a
+                track, the way a system music player's transport does. The bar
+                already has a full empty state ("Nothing playing", placeholder
+                cover, disabled transport) — it was simply never mounted to
+                show it. A permanently docked strip also stops the page height
+                changing the moment playback starts. */}
             <div
               className={cn(
                 "relative z-10 flex min-h-0 min-w-0 flex-1 flex-col",
@@ -294,12 +301,15 @@ export function AppShell({ children }: { children: ReactNode }) {
                   "pl-(--shell-inset)",
                   // The bottom player floats above this scroller. Keep enough
                   // trailing space for the final row to clear the overlay.
-                  mode === "bottom" && hasTrack && "pb-[7.5rem]",
+                  // Unconditional in this mode: the bar is docked whether or
+                  // not a track is loaded, so reserving the space only when one
+                  // is would make the page jump on the first play.
+                  mode === "bottom" && "pb-[7.5rem]",
                 )}
               >
                 {children}
               </main>
-              {mode === "bottom" && hasTrack && !fullPlayerOpen && (
+              {mode === "bottom" && !fullPlayerOpen && (
                 <PlayerBarBottom
                   onCoverActivate={() => setFullPlayerOpen(true)}
                 />
