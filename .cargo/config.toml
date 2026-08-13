@@ -1,0 +1,36 @@
+# This file lives at the repo root, not beside src-tauri/Cargo.toml, because
+# cargo discovers config by walking up from the *working directory* — never from
+# the manifest path. Under src-tauri/ it was silently ignored by every
+# `cargo … --manifest-path src-tauri/Cargo.toml` run from the repo root, which
+# is how the job cap below went unapplied while still looking configured. From
+# the root it is found both there and from src-tauri/, where `tauri dev` runs.
+
+[build]
+# Cargo defaults to one rustc per logical core — 10 on this machine — and each
+# can hold several hundred MB. That concurrent peak, not the total, is what
+# pushes a 16 GB machine into the memory compressor and stalls the UI mid-dev.
+# 6 keeps the performance cores saturated without the spike.
+jobs = 6
+
+# Local macOS development: re-sign every debug build with one stable identity so
+# the login Keychain's "Always Allow" survives rebuilds (see the script header).
+# Cargo resolves a relative `runner` against the current directory, and cargo
+# gets invoked from src-tauri by `tauri dev` but from the repo root by
+# `cargo test --manifest-path src-tauri/Cargo.toml`, so probe both rather than
+# breaking one of them. Falls through to running the binary unchanged when the
+# script is missing, and the script itself no-ops without a signing identity.
+[target.aarch64-apple-darwin]
+runner = [
+	"/bin/sh",
+	"-c",
+	'for p in scripts/dev-sign-macos.sh src-tauri/scripts/dev-sign-macos.sh; do [ -x "$p" ] && exec "$p" "$@"; done; exec "$@"',
+	"--",
+]
+
+[target.x86_64-apple-darwin]
+runner = [
+	"/bin/sh",
+	"-c",
+	'for p in scripts/dev-sign-macos.sh src-tauri/scripts/dev-sign-macos.sh; do [ -x "$p" ] && exec "$p" "$@"; done; exec "$@"',
+	"--",
+]

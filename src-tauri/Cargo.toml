@@ -15,6 +15,17 @@ edition = "2021"
 name = "goosic_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Full DWARF for all 654 crates in the tree is what grew target/debug past
+# 20 GB and made every link a multi-GB spike. Line tables still give readable
+# panic backtraces (file and line), which is all the dev loop actually reads.
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies are never stepped through, so they need no debuginfo at all.
+# They are the bulk of the 654, which makes this the larger half of the cut.
+[profile.dev.package."*"]
+debug = false
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
