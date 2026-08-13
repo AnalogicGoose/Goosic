@@ -91,7 +91,11 @@ export type GlassRendererVariant =
   | "L3"
   | "R1"
   | "R2"
-  | "R3";
+  | "R3"
+  | "S0"
+  | "S1"
+  | "S2"
+  | "S3";
 
 type GlassVariantConfig = {
   colorSpace: GlassColorSpaceMode;
@@ -144,6 +148,22 @@ type GlassVariantConfig = {
    * scale produces and a bigger radius cannot.
    */
   lowResBlock: number;
+  /**
+   * Sampling reduction for the *refraction* source, as a block size in CSS px.
+   * 0 leaves it on the pre-blurred full-resolution backdrop.
+   *
+   * Deliberately separate from `lowResBlock`. The two branches want different
+   * frequency bands: contamination wants only broad colour and luminance, while
+   * refraction has to keep recognisable album structure so there is something
+   * for the lens to visibly bend. One sample cannot serve both — coarse enough
+   * to be smoky destroys the shapes, fine enough to keep shapes is not smoky.
+   */
+  refractionResBlock: number;
+  /**
+   * Reconstruction blur after that reduction, as a multiple of its block size.
+   * Higher softens object boundaries further without losing their placement.
+   */
+  refractionRecon: number;
 };
 
 /** Every variant inherits these and overrides what it is testing. */
@@ -157,6 +177,8 @@ const GLASS_VARIANT_BASE = {
   lumaBlur: 48,
   lumaMode: "luminosity",
   lowResBlock: 0,
+  refractionResBlock: 0,
+  refractionRecon: 0.5,
 } as const satisfies GlassVariantConfig;
 
 const GLASS_VARIANTS: Record<GlassRendererVariant, GlassVariantConfig> = {
@@ -185,6 +207,21 @@ const GLASS_VARIANTS: Record<GlassRendererVariant, GlassVariantConfig> = {
   R1: { ...GLASS_VARIANT_BASE, lowResBlock: 4, wash: 18, luma: 18, lumaBlur: 12 },
   R2: { ...GLASS_VARIANT_BASE, lowResBlock: 8, wash: 18, luma: 18, lumaBlur: 12 },
   R3: { ...GLASS_VARIANT_BASE, lowResBlock: 16, wash: 18, luma: 18, lumaBlur: 12 },
+  // Structural refraction sweep. Contamination is off in S0-S2 so the only
+  // variable is what the lens is bending; S3 adds the coarse branch back on
+  // top of the winner.
+  S0: { ...GLASS_VARIANT_BASE },
+  S1: { ...GLASS_VARIANT_BASE, refractionResBlock: 4, refractionRecon: 0.5 },
+  S2: { ...GLASS_VARIANT_BASE, refractionResBlock: 4, refractionRecon: 1 },
+  S3: {
+    ...GLASS_VARIANT_BASE,
+    refractionResBlock: 4,
+    refractionRecon: 0.5,
+    lowResBlock: 16,
+    wash: 18,
+    luma: 18,
+    lumaBlur: 12,
+  },
 };
 
 
@@ -290,6 +327,14 @@ export const GLASS_LOW_RES_BLOCK: number = devNumber(
   "lowRes",
   GLASS_VARIANTS[GLASS_RENDERER_VARIANT].lowResBlock,
 );
+export const GLASS_REFRACTION_RES_BLOCK: number = devNumber(
+  "refRes",
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].refractionResBlock,
+);
+export const GLASS_REFRACTION_RECON: number = devNumber(
+  "refRecon",
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].refractionRecon,
+);
 export const GLASS_LUMA_WASH_MODE: "normal" | "luminosity" | "soft-light" =
   (() => {
     const raw = devParam("lumaMode");
@@ -301,7 +346,7 @@ export const GLASS_LUMA_WASH_MODE: "normal" | "luminosity" | "soft-light" =
 if (import.meta.env.DEV && typeof window !== "undefined") {
   // Printed so a screenshot can always be traced back to a configuration.
   console.info(
-    `[glass] variant ${GLASS_RENDERER_VARIANT} — space ${GLASS_COLOR_SPACE_MODE}, bezel ${GLASS_BEZEL_REFRACTION}, pre-blur ${GLASS_REFRACTION_PREBLUR_RATIO}x frost, colour wash ${GLASS_COLOR_WASH_STRENGTH}@${GLASS_COLOR_WASH_BLUR}px, luma wash ${GLASS_LUMA_WASH_STRENGTH}@${GLASS_LUMA_WASH_BLUR}px (${GLASS_LUMA_WASH_MODE}), low-res block ${GLASS_LOW_RES_BLOCK}`,
+    `[glass] variant ${GLASS_RENDERER_VARIANT} — space ${GLASS_COLOR_SPACE_MODE}, bezel ${GLASS_BEZEL_REFRACTION}, pre-blur ${GLASS_REFRACTION_PREBLUR_RATIO}x frost, colour wash ${GLASS_COLOR_WASH_STRENGTH}@${GLASS_COLOR_WASH_BLUR}px, luma wash ${GLASS_LUMA_WASH_STRENGTH}@${GLASS_LUMA_WASH_BLUR}px (${GLASS_LUMA_WASH_MODE}), low-res block ${GLASS_LOW_RES_BLOCK}, refraction block ${GLASS_REFRACTION_RES_BLOCK}@${GLASS_REFRACTION_RECON}x`,
   );
 }
 
@@ -361,8 +406,6 @@ const mapCache = new Map<string, MaterialMaps>();
 // 512px keeps ultra-wide player maps tall enough for a clean optical edge;
 // small menus remain native-resolution.
 const MAX_MAP_RASTER_SIZE = 512;
-/** Raster size of the quantise map, stretched to each surface by feImage. */
-const QUANTISE_MAP_SIZE = 256;
 const MAX_CACHED_MAPS = 16;
 export const FIGMA_SPECULAR_ANGLE_DEGREES = -101;
 export const FIGMA_SPECULAR_RIM_WIDTH = 2.25;
@@ -634,16 +677,20 @@ function createMaps(
  * `filterRes` would have been the native way to ask for this; Chromium ignores
  * it entirely (verified: output identical to no filter at all).
  */
-function createQuantiseMap(size: number, block: number): string {
+function createQuantiseMap(
+  width: number,
+  height: number,
+  block: number,
+): string {
   const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
+  canvas.width = width;
+  canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas 2D is unavailable for the quantise map");
-  const image = context.createImageData(size, size);
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const offset = (y * size + x) * 4;
+  const image = context.createImageData(width, height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
       const centreX = Math.floor(x / block) * block + block / 2;
       const centreY = Math.floor(y / block) * block + block / 2;
       // feDisplacementMap offsets by scale * (channel - 0.5), so with the scale
@@ -664,13 +711,42 @@ function createQuantiseMap(size: number, block: number): string {
   return url;
 }
 
-const quantiseCache = new Map<number, string>();
-/** Cached per block size: the map is geometry-independent, so one per size. */
-function getQuantiseMap(block: number): string {
-  const cached = quantiseCache.get(block);
-  if (cached) return cached;
-  const map = createQuantiseMap(QUANTISE_MAP_SIZE, block);
-  quantiseCache.set(block, map);
+const quantiseCache = new Map<string, string>();
+
+/**
+ * A quantise map sized to the surface, so a block is a fixed number of screen
+ * pixels everywhere.
+ *
+ * The first version authored one 256px map and let `feImage` stretch it, which
+ * made the sample *count* constant instead of the block size: a 207x1250
+ * sidebar got 16 samples across but 97 down, and a 191x36 player row got 3
+ * samples vertically. Blocks were neither square nor comparable between
+ * surfaces, so a single variant did not describe one visual state.
+ *
+ * Bucketed to 32px like the displacement maps, so a resize reuses a map rather
+ * than rasterising a new one per frame.
+ */
+function getQuantiseMap(
+  width: number,
+  height: number,
+  block: number,
+): string {
+  const bucket = (value: number) => Math.max(32, Math.round(value / 32) * 32);
+  const bucketWidth = bucket(width);
+  const bucketHeight = bucket(height);
+  const key = `${bucketWidth}x${bucketHeight}b${block}`;
+  const cached = quantiseCache.get(key);
+  if (cached) {
+    quantiseCache.delete(key);
+    quantiseCache.set(key, cached);
+    return cached;
+  }
+  const map = createQuantiseMap(bucketWidth, bucketHeight, block);
+  quantiseCache.set(key, map);
+  if (quantiseCache.size > MAX_CACHED_MAPS) {
+    const oldest = quantiseCache.keys().next().value;
+    if (oldest !== undefined) quantiseCache.delete(oldest);
+  }
   return map;
 }
 
@@ -783,17 +859,55 @@ function appendFilter(
   // (saturation matched so only sharpness differs between the branches).
   const refractionSource = GLASS_BEZEL_REFRACTION ? "raw_source" : "blurred_source";
   if (GLASS_BEZEL_REFRACTION) {
-    // A light low-pass ahead of the lens. Sampling the raw backdrop makes the
-    // bezel read as a sharp copy of the background pasted in; the refraction
-    // should still carry more spatial information than the frost body, but
-    // belong to the same material. Scaled off the frost radius so it tracks
-    // the material rather than being an absolute tuned to one stop.
-    const preBlurAmount = blurLevel * GLASS_REFRACTION_PREBLUR_RATIO;
+    // The structural optical sample. It has to sit between the frost body and
+    // the raw backdrop: enough of the artwork's large shapes survive for the
+    // lens to visibly bend something recognisable, without exposing sharp text
+    // or texture. Two independent controls get it there — an optional sampling
+    // reduction that removes the highest frequencies outright, and a light
+    // low-pass that softens what remains.
     let refractionInput = "SourceGraphic";
+
+    if (GLASS_REFRACTION_RES_BLOCK > 0) {
+      // Its own reduction, at a finer block than the contamination branch: that
+      // one is tuned to destroy structure, this one has to preserve it.
+      const structuralMap = svgElement("feImage");
+      setAttributes(structuralMap, {
+        href: getQuantiseMap(width, height, GLASS_REFRACTION_RES_BLOCK),
+        x: 0,
+        y: 0,
+        width,
+        height,
+        preserveAspectRatio: "none",
+        result: "structural_map",
+      });
+      const structuralQuantised = svgElement("feDisplacementMap");
+      setAttributes(structuralQuantised, {
+        in: "SourceGraphic",
+        in2: "structural_map",
+        scale: GLASS_REFRACTION_RES_BLOCK,
+        xChannelSelector: "R",
+        yChannelSelector: "G",
+        result: "structural_quantised",
+      });
+      const structuralRecon = svgElement("feGaussianBlur");
+      setAttributes(structuralRecon, {
+        in: "structural_quantised",
+        stdDeviation: Math.max(
+          0.5,
+          GLASS_REFRACTION_RES_BLOCK * GLASS_REFRACTION_RECON,
+        ),
+        "color-interpolation-filters": frostSpace,
+        result: "structural_source",
+      });
+      filter.append(structuralMap, structuralQuantised, structuralRecon);
+      refractionInput = "structural_source";
+    }
+
+    const preBlurAmount = blurLevel * GLASS_REFRACTION_PREBLUR_RATIO;
     if (preBlurAmount > 0) {
       const preBlur = svgElement("feGaussianBlur");
       setAttributes(preBlur, {
-        in: "SourceGraphic",
+        in: refractionInput,
         stdDeviation: preBlurAmount,
         "color-interpolation-filters": frostSpace,
         result: "refraction_preblur",
@@ -801,6 +915,7 @@ function appendFilter(
       filter.append(preBlur);
       refractionInput = "refraction_preblur";
     }
+
     const rawSaturate = svgElement("feColorMatrix");
     setAttributes(rawSaturate, {
       "color-interpolation-filters": frostSpace,
@@ -954,12 +1069,12 @@ function appendFilter(
   }
 
   if (lowFrequencySource === "low_res_source") {
-    // Snap each pixel to its block centre, then a light blur to smooth the
-    // grid back into continuous tone — the reconstruction half of a
+    // Snap each pixel to its block centre, then a light blur to smooth the grid
+    // back into continuous tone — the reconstruction half of a
     // downsample/upsample, without which the blocks read as a mosaic.
     const quantiseImage = svgElement("feImage");
     setAttributes(quantiseImage, {
-      href: getQuantiseMap(GLASS_LOW_RES_BLOCK),
+      href: getQuantiseMap(width, height, GLASS_LOW_RES_BLOCK),
       x: 0,
       y: 0,
       width,
@@ -967,14 +1082,11 @@ function appendFilter(
       preserveAspectRatio: "none",
       result: "quantise_map",
     });
-    // The map is authored at QUANTISE_MAP_SIZE and stretched to this surface,
-    // so the on-screen block is the authored size scaled by the same factor.
-    const screenBlock = GLASS_LOW_RES_BLOCK * (width / QUANTISE_MAP_SIZE);
     const quantised = svgElement("feDisplacementMap");
     setAttributes(quantised, {
       in: "SourceGraphic",
       in2: "quantise_map",
-      scale: screenBlock,
+      scale: GLASS_LOW_RES_BLOCK,
       xChannelSelector: "R",
       yChannelSelector: "G",
       result: "quantised",
@@ -982,7 +1094,7 @@ function appendFilter(
     const reconstruct = svgElement("feGaussianBlur");
     setAttributes(reconstruct, {
       in: "quantised",
-      stdDeviation: Math.max(1, screenBlock * 0.6),
+      stdDeviation: Math.max(1, GLASS_LOW_RES_BLOCK * 0.6),
       "color-interpolation-filters": frostSpace,
       result: "low_res_source",
     });
@@ -1400,7 +1512,7 @@ export function LiquidGlassDefs() {
       const lensKey = material.lens
         ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
         : "none";
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}w${GLASS_COLOR_WASH_STRENGTH}-${GLASS_COLOR_WASH_BLUR}m${GLASS_LUMA_WASH_STRENGTH}-${GLASS_LUMA_WASH_BLUR}-${GLASS_LUMA_WASH_MODE}q${GLASS_LOW_RES_BLOCK}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}w${GLASS_COLOR_WASH_STRENGTH}-${GLASS_COLOR_WASH_BLUR}m${GLASS_LUMA_WASH_STRENGTH}-${GLASS_LUMA_WASH_BLUR}-${GLASS_LUMA_WASH_MODE}q${GLASS_LOW_RES_BLOCK}s${GLASS_REFRACTION_RES_BLOCK}-${GLASS_REFRACTION_RECON}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 
