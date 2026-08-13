@@ -483,6 +483,30 @@ fn bridge_scheme_route<'a>(path: &'a str, token: &str) -> Option<&'a str> {
         .filter(|route| !route.is_empty())
 }
 
+/// The page's media element, in preference order: YouTube Music renders into
+/// `ytmusic-player`, the embedded watch player into `#movie_player`, and the
+/// bare tags are a last resort if either is restyled.
+const PAGE_MEDIA_EXPR: &str = "document.querySelector('ytmusic-player video') || \
+    document.querySelector('#movie_player video') || \
+    document.querySelector('video') || \
+    document.querySelector('audio')";
+
+/// Truthy while the official player is showing an advertisement, which Goosic
+/// must neither interrupt nor mistake for the requested track finishing.
+const PAGE_AD_SELECTOR: &str = ".ad-showing, ytmusic-player-bar[ad-playing], \
+    ytmusic-player-bar[is-advertisement], .ytp-ad-player-overlay, .ytp-ad-text";
+
+/// Clicked as a fallback when `media.play()` is rejected outright.
+const PAGE_PLAY_BUTTON_SELECTOR: &str =
+    "ytmusic-player-bar #play-pause-button,#movie_player .ytp-play-button";
+
+// The three constants above are Goosic's only structural coupling to a DOM
+// YouTube can restructure without notice, and the observer script, the
+// transport scripts and the state probe all need the same answers. Keep them
+// here rather than inline: copies drift, and a missed one degrades silently —
+// ad detection that quietly stops firing is indistinguishable from a playback
+// bug at the point where it actually hurts.
+
 fn observer_script(bridge_url: &str) -> String {
     let bridge = serde_json::to_string(bridge_url).expect("URL serializes");
     format!(
@@ -657,6 +681,40 @@ fn observer_script(bridge_url: &str) -> String {
       return nativePlay.apply(this, args);
     }};
   }} catch {{}}
+  // The prototype override above only runs when script calls play(). YouTube
+  // Music is a SPA: it routinely swaps the source on an element that is
+  // already playing, and the engine can begin autoplay with no script call at
+  // all. In both cases play() is never invoked, so the override never fires
+  // and the page's own pick still reached the speakers — the burst of the
+  // wrong song between tracks, worst on Windows where the loopback bridge is
+  // slowest to react. The `play` *event* fires however playback began, and a
+  // capture-phase listener on `document` also covers media elements created
+  // after this script ran, which the prototype patch cannot distinguish.
+  document.addEventListener('play', (event) => {{
+    const media = event.target;
+    if (!media || typeof media.pause !== 'function') return;
+    const silence = () => {{
+      try {{ media.muted = true; }} catch {{}}
+      try {{ media.volume = 0; }} catch {{}}
+      try {{ media.pause(); }} catch {{}}
+    }};
+    if (pendingContentEnded || reportedTrackEnded) {{
+      silence();
+      return;
+    }}
+    // Advertisements legitimately belong to the page. Before the requested
+    // track has been observed a mismatched id is a wrong-track load, which
+    // native code resolves by reloading; only once our track has actually
+    // played does a different id mean the page's own queue moved past it.
+    if (!detectAd() && observedRequestedContent) {{
+      const actual = readActualVideoId();
+      if (actual && actual !== requestedVideoId) {{
+        silence();
+        return;
+      }}
+    }}
+    applyDesiredVolume(media);
+  }}, true);
   const storedSequence = Number(readSession('goosic-player-sequence'));
   let sequence = Number.isSafeInteger(storedSequence) && storedSequence >= 0 ? storedSequence : 0;
   const nextSequence = () => {{
@@ -687,14 +745,8 @@ fn observer_script(bridge_url: &str) -> String {
   // for. Until then a mismatched video id is a wrong-track load; afterwards it
   // means the page's own autoplay queue moved past our track.
   let observedRequestedContent = false;
-  const findMedia = () =>
-    document.querySelector('ytmusic-player video') ||
-    document.querySelector('#movie_player video') ||
-    document.querySelector('video') ||
-    document.querySelector('audio');
-  const detectAd = () => !!document.querySelector(
-    '.ad-showing, ytmusic-player-bar[ad-playing], ytmusic-player-bar[is-advertisement], .ytp-ad-player-overlay, .ytp-ad-text'
-  );
+  const findMedia = () => {PAGE_MEDIA_EXPR};
+  const detectAd = () => !!document.querySelector('{PAGE_AD_SELECTOR}');
   const readActualVideoId = () => {{
     try {{
       const players = [
@@ -790,9 +842,7 @@ fn observer_script(bridge_url: &str) -> String {
     }}
     autoplayAttempts += 1;
     void media.play().catch(() => {{
-      const button = document.querySelector(
-        'ytmusic-player-bar #play-pause-button,#movie_player .ytp-play-button'
-      );
+      const button = document.querySelector('{PAGE_PLAY_BUTTON_SELECTOR}');
       if (desiredState.playing && media.paused && button) button.click();
     }});
   }};
@@ -1584,13 +1634,8 @@ fn guarded_playback_script(generation: u64, video_id: &str, body: &str) -> Strin
       sessionStorage.setItem('goosic-player-muted', desired.muted ? '1' : '0');
     }} catch {{}}
   }};
-  const media = document.querySelector('ytmusic-player video') ||
-    document.querySelector('#movie_player video') ||
-    document.querySelector('video') ||
-    document.querySelector('audio');
-  const advertisement = !!document.querySelector(
-    '.ad-showing, ytmusic-player-bar[ad-playing], ytmusic-player-bar[is-advertisement], .ytp-ad-player-overlay, .ytp-ad-text'
-  );
+  const media = {PAGE_MEDIA_EXPR};
+  const advertisement = !!document.querySelector('{PAGE_AD_SELECTOR}');
   // The official player owns the media source. Assigning `currentTime` moves
   // only the element, so a target outside the buffered range collapses back to
   // whatever is already buffered and leaves the page's own clock — the one
@@ -1629,9 +1674,11 @@ fn load_state_script(
         1.0
     };
     let transport = if playing {
-        "void media.play().catch(() => { const button=document.querySelector('ytmusic-player-bar #play-pause-button,#movie_player .ytp-play-button'); if (media.paused && button) button.click(); });"
+        format!(
+            "void media.play().catch(() => {{ const button=document.querySelector('{PAGE_PLAY_BUTTON_SELECTOR}'); if (media.paused && button) button.click(); }});"
+        )
     } else {
-        "media.pause();"
+        "media.pause();".to_string()
     };
     let body = format!(
         "desired.playing={playing}; desired.volume={volume}; desired.muted={muted}; persistDesired(); if (media) {{ if (!advertisement) {{ media.volume=desired.volume; media.muted=desired.muted; }} {transport} }}"
@@ -1651,7 +1698,9 @@ fn control_script(
             .ok_or_else(|| "invalid web player control value".to_string())
     };
     let body = match action {
-        "play" => "desired.playing=true; persistDesired(); if (media) { void media.play().catch(() => { const button=document.querySelector('ytmusic-player-bar #play-pause-button,#movie_player .ytp-play-button'); if (media.paused && button) button.click(); }); }".to_string(),
+        "play" => format!(
+            "desired.playing=true; persistDesired(); if (media) {{ void media.play().catch(() => {{ const button=document.querySelector('{PAGE_PLAY_BUTTON_SELECTOR}'); if (media.paused && button) button.click(); }}); }}"
+        ),
         "pause" => "desired.playing=false; persistDesired(); if (media) media.pause();".to_string(),
         "seek" => format!(
             "persistDesired(); if (!advertisement) {{ const target={}; if (playerApi) playerApi.seekTo(target, true); else if (media) media.currentTime=target; }}",

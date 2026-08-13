@@ -672,8 +672,24 @@ async fn dedup_accounts_by_identity(app: &tauri::AppHandle) {
     for (from_id, keeper_id) in &fresh_copies {
         let from_path = account_cookies_path(app, from_id);
         let keep_path = account_cookies_path(app, keeper_id);
-        if let Ok(bytes) = tokio::fs::read(&from_path).await {
-            let _ = tokio::fs::write(&keep_path, bytes).await;
+        // Unlike the best-effort cleanup around it, this copy is the only thing
+        // carrying the freshest session onto the row being kept — the source
+        // jar is deleted immediately after. Dropping the error here signs the
+        // user out with nothing anywhere to explain why, so both halves are
+        // reported even though neither is worth aborting the dedup for.
+        match tokio::fs::read(&from_path).await {
+            Ok(bytes) => {
+                if let Err(e) = tokio::fs::write(&keep_path, bytes).await {
+                    eprintln!(
+                        "[accounts] could not write the freshest cookie jar onto {keeper_id}, \
+                         it may need signing in again: {e}"
+                    );
+                }
+            }
+            Err(e) => eprintln!(
+                "[accounts] could not read the freshest cookie jar from {from_id}, \
+                 keeping the existing jar for {keeper_id}: {e}"
+            ),
         }
     }
 

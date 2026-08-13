@@ -33,6 +33,26 @@ import {
 } from "@/lib/web-playback";
 
 /**
+ * Push the official page's transport back to what Goosic wants after the two
+ * have drifted apart.
+ *
+ * A single failure is not fatal — the 250ms observer sample re-evaluates the
+ * same condition and tries again — so this deliberately does not retry or
+ * surface anything to the user. What it must not do is vanish: a *persistently*
+ * failing control call leaves the page audible while the UI shows paused (or
+ * the reverse) with nothing anywhere to say so, which is precisely the class of
+ * desync the diagnostics timeline exists to explain.
+ */
+function reconcileWebTransport(generation: number, action: "play" | "pause") {
+  void controlWebPlayer(generation, action).catch((error: unknown) => {
+    logCommand(`web.reconcile.${action}.failed`, {
+      generation,
+      error: String(error),
+    });
+  });
+}
+
+/**
  * AudioEngine coordinates the official native WebPlayer for online tracks and
  * a singleton HTMLAudioElement for explicit downloaded-file playback. It also
  * drives OS media controls from Rust via souvlaki; the remote WebView's own
@@ -494,7 +514,7 @@ export function useAudioEngine() {
           // of the desired transport, so reconcile both directions once the
           // new document reports ready. Without this symmetric branch the
           // remote page could keep playing while Goosic's UI was paused.
-          void controlWebPlayer(payload.generation, "pause").catch(() => {});
+          reconcileWebTransport(payload.generation, "pause");
         } else if (
           store.playing &&
           !payload.playing &&
@@ -504,7 +524,7 @@ export function useAudioEngine() {
           // advance past, so leave the transport alone until `ended` lands.
           !payload.finished
         ) {
-          void controlWebPlayer(payload.generation, "play").catch(() => {});
+          reconcileWebTransport(payload.generation, "play");
         }
         if (recoverySeek !== null) {
           webRecoverySeekRef.current = null;

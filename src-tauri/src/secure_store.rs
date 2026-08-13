@@ -212,6 +212,7 @@ mod macos {
     use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
     use aes_gcm::{Aes256Gcm, Key, Nonce};
     use keyring::Entry;
+    use std::sync::Mutex;
 
     const TAG_AES_GCM: u8 = 0x01;
     const NONCE_LEN: usize = 12;
@@ -219,7 +220,31 @@ mod macos {
     const ACCOUNT: &str = "cookies-key";
     const NETSCAPE_COOKIE_HEADER: &[u8] = b"# Netscape HTTP Cookie File";
 
+    /// Reading the Keychain entry is what raises the macOS authorization
+    /// prompt, and `encrypt`/`decrypt` run on every cookie-jar write and read —
+    /// so an uncached key means a prompt per operation rather than per launch.
+    /// Holding it for the process lifetime gives away nothing extra: the jar
+    /// this key protects is already decrypted in this process's memory.
+    static CACHED_KEY: Mutex<Option<Key<Aes256Gcm>>> = Mutex::new(None);
+
     fn load_or_create_key() -> Result<Key<Aes256Gcm>, String> {
+        // The lock is deliberately held across the Keychain round trip.
+        // `encrypt`/`decrypt` are called from `spawn_blocking`, so first-time
+        // callers can land concurrently; without serialising them both could
+        // see `NoEntry`, generate different keys and race to store one, leaving
+        // the loser encrypting under a key the Keychain no longer holds.
+        let mut cached = CACHED_KEY
+            .lock()
+            .map_err(|_| "Keychain key cache poisoned".to_string())?;
+        if let Some(key) = cached.as_ref() {
+            return Ok(*key);
+        }
+        let key = fetch_or_create_key()?;
+        *cached = Some(key);
+        Ok(key)
+    }
+
+    fn fetch_or_create_key() -> Result<Key<Aes256Gcm>, String> {
         let entry = Entry::new(SERVICE, ACCOUNT).map_err(|e| format!("Keychain entry: {e}"))?;
         match entry.get_secret() {
             Ok(bytes) if bytes.len() == 32 => Ok(*Key::<Aes256Gcm>::from_slice(&bytes)),
