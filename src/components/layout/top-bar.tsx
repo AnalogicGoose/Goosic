@@ -1,6 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { SearchIcon } from "lucide-react";
 import { isMacOSWebview } from "@/lib/platform";
+import { cn } from "@/lib/utils";
 
 // Plain-vite dev in a regular browser has no Tauri backend —
 // `getCurrentWindow()` throws on missing `__TAURI_INTERNALS__`, which
@@ -68,13 +71,21 @@ export function TopBar() {
           frameless, so `data-tauri-drag-region` is the only thing that can move
           it. The cost is that the top 36px drags instead of clicking through,
           which is how a frameless title bar behaves anyway. */}
-      <header
-        data-tauri-drag-region
-        className="absolute inset-x-0 top-0 z-30 flex h-(--titlebar-h) select-none items-center"
-      >
-        {/* Nothing but a drag region now. The sidebar runs to the top of the
-            window behind this strip, so the user can grab anywhere along it to
-            move the window without the sidebar swallowing the gesture. */}
+      <header className="group absolute inset-x-0 top-0 z-30 flex h-(--titlebar-h) select-none items-center">
+        {/* The bar itself only materialises on approach, the way Apple Music's
+            toolbar does: at rest the page runs uninterrupted to the top of the
+            window, and the backing appears when the pointer is up here (or the
+            field has focus) so the field has something to sit on. */}
+        <div
+          aria-hidden="true"
+          className="topbar-backing pointer-events-none absolute inset-y-0 right-0 bg-background/55 opacity-0 backdrop-blur-md transition-opacity duration-200 group-focus-within:opacity-100 group-hover:opacity-100"
+        />
+
+        {/* The drag region is split around the field rather than wrapping it:
+            `data-tauri-drag-region` swallows pointer events from its children,
+            so an input inside it could never be clicked or selected. */}
+        <div data-tauri-drag-region className="h-full flex-1" />
+        <TopBarSearch />
         <div data-tauri-drag-region className="h-full flex-1" />
 
         {!USES_NATIVE_MACOS_TITLEBAR && (
@@ -107,6 +118,66 @@ export function TopBar() {
         )}
       </header>
     </>
+  );
+}
+
+/**
+ * The toolbar search field, in the place macOS apps put it. Submitting hands
+ * off to /search, which owns the actual searching — history, suggestions,
+ * filters and the scope toggle all stay there rather than being rebuilt in the
+ * caption bar.
+ *
+ * Like the bar behind it, the field is nearly invisible at rest and firms up
+ * on hover or focus, so it does not compete with the page for attention.
+ */
+function TopBarSearch() {
+  const navigate = useNavigate();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [value, setValue] = useState("");
+
+  const submit = () => {
+    const q = value.trim();
+    if (!q) return;
+    void navigate({ to: "/search", search: { q, filter: "all" } });
+    inputRef.current?.blur();
+  };
+
+  return (
+    <form
+      className="relative w-full max-w-md shrink"
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+    >
+      <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+      <input
+        ref={inputRef}
+        type="search"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        // Explicit rather than relying on a form's implicit submission: that
+        // needs either a submit button or exactly one text field, and this
+        // form has neither guaranteed across the three WebViews we ship on.
+        onKeyDown={(e) => {
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          submit();
+        }}
+        placeholder="Search"
+        aria-label="Search"
+        className={cn(
+          "h-6.5 w-full rounded-full border border-transparent bg-foreground/8 pl-8.5 pr-3 text-[13px] outline-none",
+          "placeholder:text-muted-foreground",
+          "transition-colors duration-150",
+          "hover:bg-foreground/12",
+          "focus:border-foreground/20 focus:bg-foreground/15",
+          // Safari paints its own clear affordance on type=search, which
+          // collides with the pill's right edge.
+          "[&::-webkit-search-cancel-button]:appearance-none",
+        )}
+      />
+    </form>
   );
 }
 

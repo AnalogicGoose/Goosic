@@ -125,6 +125,19 @@ html body .sidebar-flush {
   border-radius: 0 !important;
 }
 
+/* The toolbar's backing covers the content area only. Running it the full
+   width of the window would lay a second material over the sidebar, which has
+   its own — that is the seam where the two used to meet. The title bar is not
+   a sibling of the sidebar (it hangs off the shell root), so the collapsed
+   width is picked up with `:has()` rather than a peer selector. */
+.topbar-backing {
+  left: var(--sidebar-width);
+}
+
+body:has([data-slot="sidebar"][data-state="collapsed"]) .topbar-backing {
+  left: var(--sidebar-width-icon);
+}
+
 /* The sidebar is a translucent overlay, not a column. Collapsing the layout
    gap shadcn reserves for it lets the content area span the full window, which
    is what allows shelf carousels to bleed left underneath the glass. Nothing
