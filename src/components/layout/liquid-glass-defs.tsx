@@ -21,6 +21,25 @@ export const FIGMA_GLASS_PRESET = {
   splay: 20,
 } as const;
 
+/**
+ * The colour space the frost stage averages in.
+ *
+ * SVG filters default to `linearRGB`; this pipeline overrides everything to
+ * `sRGB` because the displacement and specular stages carry *data* — a map's
+ * channel values are vectors, and a gamma transform corrupts them.
+ *
+ * The blur is different: it averages actual colour. Doing that in gamma-encoded
+ * sRGB averages encoded numbers rather than light, which darkens midtones and
+ * desaturates the result, so the backdrop bleeds through grey and flat. Apple
+ * composites its materials in linear light via CoreAnimation, which is why more
+ * of the artwork's colour and tonal variation survives the same nominal blur.
+ *
+ * Set to "linearRGB" to match that. It is a real perceptual change and will
+ * shift every colour already calibrated against the sRGB result, so it is a
+ * deliberate switch rather than a default.
+ */
+export const GLASS_FROST_COLOR_SPACE: "sRGB" | "linearRGB" = "sRGB";
+
 export const FIGMA_GLASS_FRAME_PAINTS = {
   base: "#101010",
   baseBlendMode: "plus-lighter",
@@ -377,6 +396,7 @@ function appendFilter(
   lens: GlassLensTokens,
   grain: number,
   frameTint: number,
+  sheen: number,
 ): void {
   const filter = svgElement("filter");
   setAttributes(filter, {
@@ -387,16 +407,22 @@ function appendFilter(
     height: height + blurLevel * 6,
     filterUnits: "userSpaceOnUse",
     primitiveUnits: "userSpaceOnUse",
-    colorInterpolationFilters: "sRGB",
+    "color-interpolation-filters": "sRGB",
   });
   const blur = svgElement("feGaussianBlur");
   setAttributes(blur, {
     in: "SourceGraphic",
     stdDeviation: blurLevel,
+    // Declared per-primitive: the filter as a whole stays sRGB for the map
+    // stages, and only the stage that averages real colour opts out.
+    "color-interpolation-filters": GLASS_FROST_COLOR_SPACE,
     result: "blurred_frost",
   });
   const saturate = svgElement("feColorMatrix");
   setAttributes(saturate, {
+    // Saturation follows the frost: boosting chroma in a different space than
+    // the blur averaged in would re-introduce the cast the switch removes.
+    "color-interpolation-filters": GLASS_FROST_COLOR_SPACE,
     in: "blurred_frost",
     type: "saturate",
     values: saturation,
@@ -569,6 +595,32 @@ function appendFilter(
   ];
   let paintedResult = "with_frame_paints";
 
+  if (sheen > 0) {
+    // The white overlay, lifted out of the Regular-only paint block so every
+    // stop can dial it. `overlay` against white doubles the darks and drives
+    // the highlights to white, so this is the term that decides how much of the
+    // backdrop's tonal range survives.
+    const sheenLayer = svgElement("feFlood");
+    setAttributes(sheenLayer, {
+      "flood-color": FIGMA_GLASS_REGULAR_PAINTS.overlay,
+      "flood-opacity": sheen / 100,
+      x: 0,
+      y: 0,
+      width,
+      height,
+      result: "sheen",
+    });
+    const withSheen = svgElement("feBlend");
+    setAttributes(withSheen, {
+      in: "sheen",
+      in2: paintedResult,
+      mode: FIGMA_GLASS_REGULAR_PAINTS.overlayBlendMode,
+      result: "with_sheen",
+    });
+    primitives.push(sheenLayer, withSheen);
+    paintedResult = "with_sheen";
+  }
+
   if (applyRegularPaints) {
     // Figma lists the Regular paints top-to-bottom. Composite the lower 80%
     // #404040 Luminosity paint first, then the 20% white Overlay paint.
@@ -589,30 +641,8 @@ function appendFilter(
       mode: FIGMA_GLASS_REGULAR_PAINTS.baseBlendMode,
       result: "with_regular_base",
     });
-    const regularOverlay = svgElement("feFlood");
-    setAttributes(regularOverlay, {
-      "flood-color": FIGMA_GLASS_REGULAR_PAINTS.overlay,
-      "flood-opacity": FIGMA_GLASS_REGULAR_PAINTS.overlayOpacity,
-      x: 0,
-      y: 0,
-      width,
-      height,
-      result: "regular_overlay",
-    });
-    const withRegularPaints = svgElement("feBlend");
-    setAttributes(withRegularPaints, {
-      in: "regular_overlay",
-      in2: "with_regular_base",
-      mode: FIGMA_GLASS_REGULAR_PAINTS.overlayBlendMode,
-      result: "with_regular_paints",
-    });
-    primitives.push(
-      regularBase,
-      withRegularBase,
-      regularOverlay,
-      withRegularPaints,
-    );
-    paintedResult = "with_regular_paints";
+    primitives.push(regularBase, withRegularBase);
+    paintedResult = "with_regular_base";
   }
 
   if (materialShade > 0 || materialLuminosity > 0) {
@@ -812,7 +842,7 @@ export function LiquidGlassDefs() {
       const lensKey = material.lens
         ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
         : "none";
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}`;
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}c${GLASS_FROST_COLOR_SPACE}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 
@@ -867,6 +897,7 @@ export function LiquidGlassDefs() {
         lens,
         material.grain,
         material.frameTint,
+        material.sheen,
       );
       const filterValue = `url("#${id}")`;
       element.style.setProperty("--liquid-glass-filter", filterValue);
