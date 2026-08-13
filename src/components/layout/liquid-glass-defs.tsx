@@ -180,7 +180,9 @@ function createMaps(
   );
   const rasterWidth = Math.max(2, Math.round(width * rasterScale));
   const rasterHeight = Math.max(2, Math.round(height * rasterScale));
-  const rasterRadius = Math.max(1, radius * rasterScale);
+  // Floored at 0, not 1: a square surface must stay square in the raster too,
+  // or the corners keep a 1px round the element does not have.
+  const rasterRadius = Math.max(0, radius * rasterScale);
   const maximumDepth = Math.max(1, Math.min(rasterWidth, rasterHeight) / 2 - 1);
   const bezelWidth = Math.min(
     maximumDepth,
@@ -725,8 +727,16 @@ export function LiquidGlassDefs() {
       const height = element.offsetHeight;
       if (width < 2 || height < 2) return;
       const computed = getComputedStyle(element);
+      // `|| 34` treated a legitimate zero radius as a missing one, because
+      // parseFloat("0px") is falsy — so a square surface (the flush sidebar)
+      // still had its displacement and specular maps built around the old 34px
+      // card, and the highlight traced a shape the element no longer had. Only
+      // an unparseable value should fall back. The floor is 0 rather than 1 for
+      // the same reason; `superellipseRectSdf` divides by nothing and degrades
+      // to a sharp-cornered rect.
+      const parsedRadius = Number.parseFloat(computed.borderTopLeftRadius);
       const radius = Math.min(
-        Math.max(1, Number.parseFloat(computed.borderTopLeftRadius) || 34),
+        Math.max(0, Number.isFinite(parsedRadius) ? parsedRadius : 34),
         width / 2,
         height / 2,
       );

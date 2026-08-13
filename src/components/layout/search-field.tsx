@@ -56,7 +56,6 @@ export function SearchField({
 
   const [value, setValue] = useState(urlQ);
   const debounced = useDebounced(value, 300);
-  const userTypedRef = useRef(false);
 
   const history = useSearchHistory((s) => s.items);
   const pushHistory = useSearchHistory((s) => s.push);
@@ -71,21 +70,14 @@ export function SearchField({
   // entry that calls navigate, or hitting Back).
   useEffect(() => {
     setValue(urlQ);
-    userTypedRef.current = false;
   }, [urlQ]);
 
-  // As the user types, mirror the value into the URL so the route re-runs the
-  // search query. Replace history while staying on /search so Back returns to
-  // whatever page got the user here, not every keystroke.
-  useEffect(() => {
-    if (!userTypedRef.current) return;
-    if (debounced === urlQ) return;
-    navigate({
-      to: "/search",
-      search: { q: debounced || undefined, filter },
-      replace: true,
-    });
-  }, [debounced, urlQ, filter, navigate]);
+  // Typing deliberately does NOT run the search. The value used to be mirrored
+  // into the URL on a debounce, which re-ran the route's query on every pause —
+  // so a half-typed word issued a real search, and the results churned
+  // underneath the suggestions. Searching is now an explicit act: Enter, or
+  // picking a row from the dropdown. The debounced value still drives
+  // suggestions, which are cheap and are the point of typing.
 
   // Auto-focus whenever the route mounts, so opening Search from the sidebar
   // drops the user straight into typing.
@@ -149,7 +141,6 @@ export function SearchField({
     const trimmed = q.trim();
     if (!trimmed) return;
     pushHistory(trimmed);
-    userTypedRef.current = true;
     setValue(trimmed);
     setFocused(false);
     inputRef.current?.blur();
@@ -186,7 +177,6 @@ export function SearchField({
   };
 
   const clear = () => {
-    userTypedRef.current = true;
     setValue("");
     inputRef.current?.focus();
     navigate({
@@ -197,6 +187,17 @@ export function SearchField({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      // Handled here rather than left to the form's implicit submission. That
+      // depends on a submit button or exactly one text field, and Enter is now
+      // the only way to run a search — not worth leaving to a rule the three
+      // WebViews interpret differently.
+      e.preventDefault();
+      const active = activeIdx >= 0 ? entries[activeIdx] : undefined;
+      if (active) choose(active);
+      else submitQuery(value);
+      return;
+    }
     if (e.key === "Escape") {
       if (value) {
         clear();
@@ -235,8 +236,7 @@ export function SearchField({
           className="h-10 rounded-full pl-10 pr-10"
           value={value}
           onChange={(e) => {
-            userTypedRef.current = true;
-            setValue(e.target.value);
+                    setValue(e.target.value);
           }}
           onFocus={() => setFocused(true)}
           onBlur={(e) => {
