@@ -88,7 +88,10 @@ export type GlassRendererVariant =
   | "W3"
   | "L1"
   | "L2"
-  | "L3";
+  | "L3"
+  | "R1"
+  | "R2"
+  | "R3";
 
 type GlassVariantConfig = {
   colorSpace: GlassColorSpaceMode;
@@ -130,6 +133,17 @@ type GlassVariantConfig = {
   lumaBlur: number;
   /** How the luminance branch reaches the body. */
   lumaMode: "normal" | "luminosity" | "soft-light";
+  /**
+   * Effective sampling resolution of the low-frequency branches, as a block
+   * size in CSS px. 0 keeps them on the full-resolution frost intermediate.
+   *
+   * Re-blurring a full-resolution backdrop is what repeatedly failed: a
+   * Gaussian converges to the local mean, so a wide one flattens toward grey
+   * rather than leaving broad regions behind. Point-sampling a coarse grid
+   * keeps block-to-block variation, which is the signature Apple's backdrop
+   * scale produces and a bigger radius cannot.
+   */
+  lowResBlock: number;
 };
 
 /** Every variant inherits these and overrides what it is testing. */
@@ -142,6 +156,7 @@ const GLASS_VARIANT_BASE = {
   luma: 0,
   lumaBlur: 48,
   lumaMode: "luminosity",
+  lowResBlock: 0,
 } as const satisfies GlassVariantConfig;
 
 const GLASS_VARIANTS: Record<GlassRendererVariant, GlassVariantConfig> = {
@@ -164,6 +179,12 @@ const GLASS_VARIANTS: Record<GlassRendererVariant, GlassVariantConfig> = {
   L1: { ...GLASS_VARIANT_BASE, luma: 10, lumaBlur: 48, lumaMode: "normal" },
   L2: { ...GLASS_VARIANT_BASE, luma: 18, lumaBlur: 48, lumaMode: "luminosity" },
   L3: { ...GLASS_VARIANT_BASE, luma: 25, lumaBlur: 72, lumaMode: "soft-light" },
+  // Effective-resolution sweep. The low-frequency branches read a coarsely
+  // point-sampled backdrop instead of a re-blurred one; both colour and
+  // luminance feed from it, since the target is broad diffusion of both.
+  R1: { ...GLASS_VARIANT_BASE, lowResBlock: 4, wash: 18, luma: 18, lumaBlur: 12 },
+  R2: { ...GLASS_VARIANT_BASE, lowResBlock: 8, wash: 18, luma: 18, lumaBlur: 12 },
+  R3: { ...GLASS_VARIANT_BASE, lowResBlock: 16, wash: 18, luma: 18, lumaBlur: 12 },
 };
 
 
@@ -265,6 +286,10 @@ export const GLASS_LUMA_WASH_BLUR: number = devNumber(
   "lumaBlur",
   GLASS_VARIANTS[GLASS_RENDERER_VARIANT].lumaBlur,
 );
+export const GLASS_LOW_RES_BLOCK: number = devNumber(
+  "lowRes",
+  GLASS_VARIANTS[GLASS_RENDERER_VARIANT].lowResBlock,
+);
 export const GLASS_LUMA_WASH_MODE: "normal" | "luminosity" | "soft-light" =
   (() => {
     const raw = devParam("lumaMode");
@@ -276,7 +301,7 @@ export const GLASS_LUMA_WASH_MODE: "normal" | "luminosity" | "soft-light" =
 if (import.meta.env.DEV && typeof window !== "undefined") {
   // Printed so a screenshot can always be traced back to a configuration.
   console.info(
-    `[glass] variant ${GLASS_RENDERER_VARIANT} — space ${GLASS_COLOR_SPACE_MODE}, bezel ${GLASS_BEZEL_REFRACTION}, pre-blur ${GLASS_REFRACTION_PREBLUR_RATIO}x frost, colour wash ${GLASS_COLOR_WASH_STRENGTH}@${GLASS_COLOR_WASH_BLUR}px, luma wash ${GLASS_LUMA_WASH_STRENGTH}@${GLASS_LUMA_WASH_BLUR}px (${GLASS_LUMA_WASH_MODE})`,
+    `[glass] variant ${GLASS_RENDERER_VARIANT} — space ${GLASS_COLOR_SPACE_MODE}, bezel ${GLASS_BEZEL_REFRACTION}, pre-blur ${GLASS_REFRACTION_PREBLUR_RATIO}x frost, colour wash ${GLASS_COLOR_WASH_STRENGTH}@${GLASS_COLOR_WASH_BLUR}px, luma wash ${GLASS_LUMA_WASH_STRENGTH}@${GLASS_LUMA_WASH_BLUR}px (${GLASS_LUMA_WASH_MODE}), low-res block ${GLASS_LOW_RES_BLOCK}`,
   );
 }
 
@@ -336,6 +361,8 @@ const mapCache = new Map<string, MaterialMaps>();
 // 512px keeps ultra-wide player maps tall enough for a clean optical edge;
 // small menus remain native-resolution.
 const MAX_MAP_RASTER_SIZE = 512;
+/** Raster size of the quantise map, stretched to each surface by feImage. */
+const QUANTISE_MAP_SIZE = 256;
 const MAX_CACHED_MAPS = 16;
 export const FIGMA_SPECULAR_ANGLE_DEGREES = -101;
 export const FIGMA_SPECULAR_RIM_WIDTH = 2.25;
@@ -593,6 +620,60 @@ function createMaps(
   return maps;
 }
 
+/**
+ * A displacement map that snaps every pixel to the centre of its block, so
+ * `feDisplacementMap` performs nearest-neighbour point sampling on a coarse
+ * grid. That is genuine resolution reduction, not averaging.
+ *
+ * The distinction matters and is measurable: a Gaussian converges to the local
+ * mean, so a wide one flattens a detailed backdrop toward uniform grey — on a
+ * 2px checkerboard, blur(4) drops the standard deviation from 127.5 to 0.6.
+ * Point sampling keeps block-to-block variation instead, which is why broad
+ * colour and luminance regions survive while fine detail does not.
+ *
+ * `filterRes` would have been the native way to ask for this; Chromium ignores
+ * it entirely (verified: output identical to no filter at all).
+ */
+function createQuantiseMap(size: number, block: number): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas 2D is unavailable for the quantise map");
+  const image = context.createImageData(size, size);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const offset = (y * size + x) * 4;
+      const centreX = Math.floor(x / block) * block + block / 2;
+      const centreY = Math.floor(y / block) * block + block / 2;
+      // feDisplacementMap offsets by scale * (channel - 0.5), so with the scale
+      // set to `block` a channel of 0.5 + (centre - pos)/block lands exactly on
+      // the block centre and the encoding never leaves [0, 1].
+      const encode = (delta: number) =>
+        Math.max(0, Math.min(255, Math.round(255 * (0.5 + delta / block))));
+      image.data[offset] = encode(centreX - x);
+      image.data[offset + 1] = encode(centreY - y);
+      image.data[offset + 2] = 128;
+      image.data[offset + 3] = 255;
+    }
+  }
+  context.putImageData(image, 0, 0);
+  const url = canvas.toDataURL("image/png");
+  canvas.width = 1;
+  canvas.height = 1;
+  return url;
+}
+
+const quantiseCache = new Map<number, string>();
+/** Cached per block size: the map is geometry-independent, so one per size. */
+function getQuantiseMap(block: number): string {
+  const cached = quantiseCache.get(block);
+  if (cached) return cached;
+  const map = createQuantiseMap(QUANTISE_MAP_SIZE, block);
+  quantiseCache.set(block, map);
+  return map;
+}
+
 function getCachedMaps(
   key: string,
   width: number,
@@ -672,6 +753,12 @@ function appendFilter(
   const washOn = GLASS_COLOR_WASH_STRENGTH > 0;
   const lumaOn = GLASS_LUMA_WASH_STRENGTH > 0;
   const bodyResult = washOn || lumaOn ? "body_mix" : "dispersed";
+  // Both low-frequency branches read this. On the full-resolution frost by
+  // default; on a coarsely point-sampled backdrop when a block size is set.
+  const lowFrequencySource =
+    GLASS_LOW_RES_BLOCK > 0 && (washOn || lumaOn)
+      ? "low_res_source"
+      : "blurred_source";
 
   const blur = svgElement("feGaussianBlur");
   setAttributes(blur, {
@@ -866,6 +953,42 @@ function appendFilter(
     filter.append(deviation, toAlpha, shape, edgeOptics, spatial);
   }
 
+  if (lowFrequencySource === "low_res_source") {
+    // Snap each pixel to its block centre, then a light blur to smooth the
+    // grid back into continuous tone — the reconstruction half of a
+    // downsample/upsample, without which the blocks read as a mosaic.
+    const quantiseImage = svgElement("feImage");
+    setAttributes(quantiseImage, {
+      href: getQuantiseMap(GLASS_LOW_RES_BLOCK),
+      x: 0,
+      y: 0,
+      width,
+      height,
+      preserveAspectRatio: "none",
+      result: "quantise_map",
+    });
+    // The map is authored at QUANTISE_MAP_SIZE and stretched to this surface,
+    // so the on-screen block is the authored size scaled by the same factor.
+    const screenBlock = GLASS_LOW_RES_BLOCK * (width / QUANTISE_MAP_SIZE);
+    const quantised = svgElement("feDisplacementMap");
+    setAttributes(quantised, {
+      in: "SourceGraphic",
+      in2: "quantise_map",
+      scale: screenBlock,
+      xChannelSelector: "R",
+      yChannelSelector: "G",
+      result: "quantised",
+    });
+    const reconstruct = svgElement("feGaussianBlur");
+    setAttributes(reconstruct, {
+      in: "quantised",
+      stdDeviation: Math.max(1, screenBlock * 0.6),
+      "color-interpolation-filters": frostSpace,
+      result: "low_res_source",
+    });
+    filter.append(quantiseImage, quantised, reconstruct);
+  }
+
   if (washOn) {
     // Broad background colour bleeding into the surface — the dirty, smoky
     // character native glass has and a clean blur does not. Reuses the frost
@@ -873,7 +996,7 @@ function appendFilter(
     // and this costs one more blur rather than a second full chain.
     const wash = svgElement("feGaussianBlur");
     setAttributes(wash, {
-      in: "blurred_source",
+      in: lowFrequencySource,
       stdDeviation: GLASS_COLOR_WASH_BLUR,
       "color-interpolation-filters": frostSpace,
       result: "wash_blur",
@@ -911,7 +1034,7 @@ function appendFilter(
     // the backdrop.
     const lumaBlur = svgElement("feGaussianBlur");
     setAttributes(lumaBlur, {
-      in: "blurred_source",
+      in: lowFrequencySource,
       stdDeviation: GLASS_LUMA_WASH_BLUR,
       "color-interpolation-filters": frostSpace,
       result: "luma_blur",
@@ -1277,7 +1400,7 @@ export function LiquidGlassDefs() {
       const lensKey = material.lens
         ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
         : "none";
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}w${GLASS_COLOR_WASH_STRENGTH}-${GLASS_COLOR_WASH_BLUR}m${GLASS_LUMA_WASH_STRENGTH}-${GLASS_LUMA_WASH_BLUR}-${GLASS_LUMA_WASH_MODE}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}w${GLASS_COLOR_WASH_STRENGTH}-${GLASS_COLOR_WASH_BLUR}m${GLASS_LUMA_WASH_STRENGTH}-${GLASS_LUMA_WASH_BLUR}-${GLASS_LUMA_WASH_MODE}q${GLASS_LOW_RES_BLOCK}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 
