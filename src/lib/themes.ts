@@ -249,6 +249,17 @@ export type WebGlassMaterialTokens = {
   /** Backdrop saturation multiplier. Above 1 for glass, below 1 for Classic. */
   saturation: number;
   /**
+   * How strongly the flat frame colour is added over the backdrop, 0-100.
+   *
+   * The frame paint is Plus Lighter: it *adds* #101010 to every pixel rather
+   * than covering them, so it lifts the whole surface toward opaque without
+   * ever being an opaque fill. At 100 that lift is a flat +16/255 everywhere,
+   * which is most of why a surface can read as less see-through than its macOS
+   * counterpart while every other value matches. Lower it to let more of the
+   * backdrop through; 0 removes the frame colour entirely.
+   */
+  frameTint: number;
+  /**
    * Surface grain, 0-100.
    *
    * The axis a synthesized blur has no way to reach otherwise. Apple's
@@ -310,6 +321,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 3,
     shade: 0,
     saturation: 1.1,
+    frameTint: 100,
     grain: 8,
     lens: { refraction: 30, depth: 20, dispersion: 20, splay: 20 },
   },
@@ -326,6 +338,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     // stops: Regular bends the backdrop, Clear barely disturbs it. These are
     // the original Figma optics; Clear now carries its own tuned set instead of
     // both sharing one global preset.
+    frameTint: 100,
     grain: 10,
     lens: { refraction: 30, depth: 20, dispersion: 20, splay: 20 },
   },
@@ -334,6 +347,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 2,
     shade: 22,
     saturation: 1.2,
+    frameTint: 100,
     grain: 6,
     lens: { refraction: 70, depth: 30, dispersion: 20, splay: 20 },
   },
@@ -345,6 +359,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 4,
     shade: 12,
     saturation: 1.1,
+    frameTint: 100,
     grain: 0,
     lens: null,
   },
@@ -353,6 +368,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 4,
     shade: 20,
     saturation: 0.95,
+    frameTint: 100,
     grain: 0,
     lens: null,
   },
@@ -361,6 +377,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 3,
     shade: 30,
     saturation: 0.8,
+    frameTint: 100,
     grain: 0,
     lens: null,
   },
@@ -369,6 +386,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 3,
     shade: 42,
     saturation: 0.6,
+    frameTint: 100,
     grain: 0,
     lens: null,
   },
@@ -377,6 +395,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     luminosity: 5,
     shade: 38,
     saturation: 0.45,
+    frameTint: 100,
     grain: 0,
     lens: null,
   },

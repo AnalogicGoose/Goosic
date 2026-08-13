@@ -376,6 +376,7 @@ function appendFilter(
   materialShade: number,
   lens: GlassLensTokens,
   grain: number,
+  frameTint: number,
 ): void {
   const filter = svgElement("filter");
   setAttributes(filter, {
@@ -512,8 +513,13 @@ function appendFilter(
     result: "with_saturation",
   });
   // Figma frame paints, composited after the glass effect. `arithmetic` with
-  // k2=k3=1 is the SVG equivalent of Plus Lighter: it adds #101010 to the
+  // k2=1 is the SVG equivalent of Plus Lighter: it adds the frame colour to the
   // refracted pixels without replacing them with an opaque dark fill.
+  //
+  // k3 scales that addition rather than being pinned at 1, which is what makes
+  // the frame colour's weight adjustable. At k3=1 the surface takes a flat
+  // +16/255 everywhere — enough to read as noticeably less see-through than the
+  // same material on macOS while every other value matches.
   const frameBase = svgElement("feFlood");
   setAttributes(frameBase, {
     "flood-color": FIGMA_GLASS_FRAME_PAINTS.base,
@@ -529,7 +535,7 @@ function appendFilter(
     in2: "frame_base",
     operator: "arithmetic",
     k2: 1,
-    k3: 1,
+    k3: frameTint / 100,
     result: "with_frame_base",
   });
   const frameLuminosity = svgElement("feFlood");
@@ -806,7 +812,7 @@ export function LiquidGlassDefs() {
       const lensKey = material.lens
         ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
         : "none";
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}`;
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 
@@ -860,6 +866,7 @@ export function LiquidGlassDefs() {
         material.shade,
         lens,
         material.grain,
+        material.frameTint,
       );
       const filterValue = `url("#${id}")`;
       element.style.setProperty("--liquid-glass-filter", filterValue);
