@@ -22,23 +22,55 @@ export const FIGMA_GLASS_PRESET = {
 } as const;
 
 /**
- * The colour space the frost stage averages in.
+ * Which stages average colour in linear light rather than gamma-encoded sRGB.
  *
  * SVG filters default to `linearRGB`; this pipeline overrides everything to
- * `sRGB` because the displacement and specular stages carry *data* — a map's
- * channel values are vectors, and a gamma transform corrupts them.
+ * `sRGB`, which is correct for the displacement and specular stages because
+ * those maps carry *data* — a map's channel values are vectors, and a gamma
+ * transform corrupts them. It is not obviously correct for the stages that
+ * average real colour.
  *
- * The blur is different: it averages actual colour. Doing that in gamma-encoded
- * sRGB averages encoded numbers rather than light, which darkens midtones and
- * desaturates the result, so the backdrop bleeds through grey and flat. Apple
- * composites its materials in linear light via CoreAnimation, which is why more
- * of the artwork's colour and tonal variation survives the same nominal blur.
+ * Averaging gamma-encoded values averages encoded numbers rather than light,
+ * which darkens midtones and desaturates, so the backdrop bleeds through grey
+ * and flat. Apple composites its materials in linear light via CoreAnimation,
+ * which is why more of the artwork's colour survives the same nominal blur.
  *
- * Set to "linearRGB" to match that. It is a real perceptual change and will
- * shift every colour already calibrated against the sRGB result, so it is a
- * deliberate switch rather than a default.
+ *  - `srgb`  production baseline; nothing opts out.
+ *  - `frost` blur and the saturation that follows it only.
+ *  - `full`  the above plus the colour blends that recombine and paint the
+ *            material. The map stages stay sRGB in every mode.
+ *
+ * A real perceptual change: it shifts every colour calibrated against the sRGB
+ * result, so it is a deliberate switch rather than a default.
  */
-export const GLASS_FROST_COLOR_SPACE: "sRGB" | "linearRGB" = "sRGB";
+export type GlassColorSpaceMode = "srgb" | "frost" | "full";
+export const GLASS_COLOR_SPACE_MODE: GlassColorSpaceMode = "srgb";
+
+/**
+ * Refraction reads the *unblurred* backdrop and is confined to the bezel.
+ *
+ * Production refracts an already-frosted texture, so the lens has no
+ * high-frequency detail left to bend. Feeding it the raw backdrop restores that,
+ * but only if the contribution is spatially weighted: a controlled test mixing
+ * the sharp branch uniformly at 50% dissolved the frost entirely and the surface
+ * read as a tinted transparent overlay rather than glass.
+ *
+ * So the body stays frost-dominated and the refracted branch is masked to the
+ * bezel, giving centre = frost, bezel = frost + refraction, extreme edge =
+ * strongest displacement and chromatic separation.
+ */
+export const GLASS_BEZEL_REFRACTION = false;
+
+/**
+ * Hardening curve applied to the bezel mask.
+ *
+ * EXPERIMENTAL — not an Apple/Figma value, and deliberately not folded into the
+ * material specification. It came from a first pass on the synthetic bench and
+ * needs calibrating on the real Windows renderer. The mask itself is derived
+ * from the existing displacement map rather than any new geometry; this only
+ * shapes how quickly its contribution ramps up toward the edge.
+ */
+export const GLASS_BEZEL_MASK_EXPONENT = 0.6;
 
 export const FIGMA_GLASS_FRAME_PAINTS = {
   base: "#101010",
@@ -409,25 +441,46 @@ function appendFilter(
     primitiveUnits: "userSpaceOnUse",
     "color-interpolation-filters": "sRGB",
   });
+  // Declared per-primitive: the filter as a whole stays sRGB so the map stages
+  // keep their vector channels intact, and only the stages that average real
+  // colour opt out.
+  const frostSpace =
+    GLASS_COLOR_SPACE_MODE === "srgb" ? "sRGB" : "linearRGB";
+  const mixSpace = GLASS_COLOR_SPACE_MODE === "full" ? "linearRGB" : "sRGB";
+
   const blur = svgElement("feGaussianBlur");
   setAttributes(blur, {
     in: "SourceGraphic",
     stdDeviation: blurLevel,
-    // Declared per-primitive: the filter as a whole stays sRGB for the map
-    // stages, and only the stage that averages real colour opts out.
-    "color-interpolation-filters": GLASS_FROST_COLOR_SPACE,
+    "color-interpolation-filters": frostSpace,
     result: "blurred_frost",
   });
   const saturate = svgElement("feColorMatrix");
   setAttributes(saturate, {
     // Saturation follows the frost: boosting chroma in a different space than
     // the blur averaged in would re-introduce the cast the switch removes.
-    "color-interpolation-filters": GLASS_FROST_COLOR_SPACE,
+    "color-interpolation-filters": frostSpace,
     in: "blurred_frost",
     type: "saturate",
     values: saturation,
     result: "blurred_source",
   });
+
+  // The refraction branch's input. Production bends the frosted texture, which
+  // has no high-frequency detail left; the bezel path bends the raw backdrop
+  // (saturation matched so only sharpness differs between the branches).
+  const refractionSource = GLASS_BEZEL_REFRACTION ? "raw_source" : "blurred_source";
+  if (GLASS_BEZEL_REFRACTION) {
+    const rawSaturate = svgElement("feColorMatrix");
+    setAttributes(rawSaturate, {
+      "color-interpolation-filters": frostSpace,
+      in: "SourceGraphic",
+      type: "saturate",
+      values: saturation,
+      result: "raw_source",
+    });
+    filter.append(rawSaturate);
+  }
   // Both maps overdraw the panel by 1px per side: layout sizes can be
   // fractional while offsetWidth/Height round down, and any backdrop pixel
   // left outside the displacement map is treated as (0,0) — a huge negative
@@ -459,7 +512,7 @@ function appendFilter(
   ) => {
     const displaced = svgElement("feDisplacementMap");
     setAttributes(displaced, {
-      in: "blurred_source",
+      in: refractionSource,
       in2: "displacement_map",
       scale,
       xChannelSelector: "R",
@@ -497,6 +550,7 @@ function appendFilter(
     in: "red_channel",
     in2: "green_channel",
     mode: "screen",
+    "color-interpolation-filters": mixSpace,
     result: "red_green",
   });
   const dispersed = svgElement("feBlend");
@@ -504,8 +558,70 @@ function appendFilter(
     in: "red_green",
     in2: "blue_channel",
     mode: "screen",
-    result: "dispersed",
+    "color-interpolation-filters": mixSpace,
+    // Named `refracted` when the bezel path owns the recombination below, so
+    // everything downstream keeps consuming a single `dispersed` result either
+    // way and the two architectures stay swappable.
+    result: GLASS_BEZEL_REFRACTION ? "refracted" : "dispersed",
   });
+  filter.append(redGreen, dispersed);
+
+  if (GLASS_BEZEL_REFRACTION) {
+    // The bezel weight is already encoded in the displacement map: it sits at
+    // the neutral 128 outside the bezel and deviates inside, so a table
+    // transfer of [1, 0, 1] is |x - 0.5| — the deviation magnitude, and
+    // therefore how hard the lens is bending at that pixel. No second geometry
+    // representation, no extra raster; this reuses the map the SDF already
+    // produced for displacement.
+    const deviation = svgElement("feComponentTransfer");
+    setAttributes(deviation, { in: "displacement_map", result: "bezel_deviation" });
+    const devR = svgElement("feFuncR");
+    setAttributes(devR, { type: "table", tableValues: "1 0 1" });
+    const devG = svgElement("feFuncG");
+    setAttributes(devG, { type: "table", tableValues: "1 0 1" });
+    const devB = svgElement("feFuncB");
+    setAttributes(devB, { type: "table", tableValues: "0 0" });
+    deviation.append(devR, devG, devB);
+
+    // Fold the two deviation channels into alpha — the displacement is a 2D
+    // vector, so either axis bending counts toward the weight.
+    const toAlpha = svgElement("feColorMatrix");
+    setAttributes(toAlpha, {
+      in: "bezel_deviation",
+      type: "matrix",
+      values: "0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  2 2 0 0 0",
+      result: "bezel_alpha",
+    });
+    const shape = svgElement("feComponentTransfer");
+    setAttributes(shape, { in: "bezel_alpha", result: "bezel_mask" });
+    const shapeA = svgElement("feFuncA");
+    setAttributes(shapeA, {
+      type: "gamma",
+      amplitude: 1,
+      exponent: GLASS_BEZEL_MASK_EXPONENT,
+      offset: 0,
+    });
+    shape.append(shapeA);
+
+    const edgeOptics = svgElement("feComposite");
+    setAttributes(edgeOptics, {
+      in: "refracted",
+      in2: "bezel_mask",
+      operator: "in",
+      result: "edge_optics",
+    });
+    // Frost owns the body; the refracted branch only ever adds where the mask
+    // says the lens is working. A uniform mix of the two dissolves the frost.
+    const spatial = svgElement("feBlend");
+    setAttributes(spatial, {
+      in: "edge_optics",
+      in2: "blurred_source",
+      mode: "normal",
+      "color-interpolation-filters": mixSpace,
+      result: "dispersed",
+    });
+    filter.append(deviation, toAlpha, shape, edgeOptics, spatial);
+  }
   const specularImage = svgElement("feImage");
   setAttributes(specularImage, {
     href: maps.specular,
@@ -582,8 +698,6 @@ function appendFilter(
     result: "with_frame_paints",
   });
   const primitives = [
-    redGreen,
-    dispersed,
     specularImage,
     specularSaturated,
     specularFaded,
@@ -842,7 +956,7 @@ export function LiquidGlassDefs() {
       const lensKey = material.lens
         ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
         : "none";
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}c${GLASS_FROST_COLOR_SPACE}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
+      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}c${GLASS_COLOR_SPACE_MODE}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 
