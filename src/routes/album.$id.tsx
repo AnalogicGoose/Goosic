@@ -5,6 +5,7 @@ import { fetchAlbum } from "@/lib/innertube/album";
 import { EntityHeader } from "@/components/shared/entity-header";
 import { TrackList } from "@/components/shared/track-list";
 import { JumpToCurrentButton } from "@/components/shared/jump-to-current-button";
+import { PlaylistActionsMenu } from "@/components/shared/playlist-actions-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePlaybackStore } from "@/lib/store/playback";
 
@@ -92,6 +93,18 @@ function AlbumPageView() {
             usePlaybackStore.getState().setShuffle(true);
           }
         }}
+        actions={
+          // YouTube addresses an album by its audio playlist for library
+          // saves and radio. Some responses omit it, and there is no
+          // second way to derive one, so the menu simply isn't offered.
+          data.audioPlaylistId ? (
+            <PlaylistActionsMenu
+              playlistId={data.audioPlaylistId}
+              libraryId={id}
+              title={data.title}
+            />
+          ) : undefined
+        }
       />
       {subtitleParts.length > 0 ? (
         <p className="-mt-4 flex flex-wrap items-center gap-1 text-sm text-muted-foreground">

@@ -68,7 +68,13 @@ export function TopBar() {
           frameless, so `data-tauri-drag-region` is the only thing that can move
           it. The cost is that the top 36px drags instead of clicking through,
           which is how a frameless title bar behaves anyway. */}
-      <header className="absolute inset-x-0 top-0 z-30 flex h-(--titlebar-h) select-none items-center">
+      {/* `fixed` + z-60: dialog overlays are portalled to the body at
+          z-50 and now cover the full window, so an `absolute` header
+          inside the shell's own stacking context would be dimmed and
+          unclickable along with everything else. Its own top-level
+          layer keeps the window controls crisp and interactive while
+          the dim still reaches the top of the window. */}
+      <header className="fixed inset-x-0 top-0 z-60 flex h-(--titlebar-h) select-none items-center">
         <div data-tauri-drag-region className="h-full flex-1" />
 
         {!USES_NATIVE_MACOS_TITLEBAR && (

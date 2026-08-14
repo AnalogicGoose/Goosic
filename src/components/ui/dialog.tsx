@@ -40,9 +40,11 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        // Starts below the custom title bar (--titlebar-h) so the
-        // window-control strip stays crisp above the dim + blur.
-        "fixed inset-x-0 bottom-0 top-(--titlebar-h) z-50 bg-black/50 backdrop-blur-xs data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
+        // Covers the whole window, title bar included — stopping at
+        // --titlebar-h left an undimmed 36px band across the top. The
+        // window controls stay usable because TopBar renders its own
+        // fixed layer above z-50.
+        "fixed inset-0 z-50 bg-black/50 backdrop-blur-xs data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
         className,
       )}
       {...props}

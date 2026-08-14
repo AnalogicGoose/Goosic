@@ -67,7 +67,7 @@ export default function FloatingPlayerApp() {
               hasNativeMaterial ? "bg-transparent" : "bg-background",
             )}
           >
-            {windowsGlass ? <NowPlayingBackground /> : null}
+            {windowsGlass ? <NowPlayingBackground variant="blurred" /> : null}
             {windowsGlass ? <LiquidGlassDefs /> : null}
             <div
               className={cn(

@@ -25,6 +25,7 @@ import {
   ListMusicIcon,
   PlusIcon,
   MoreHorizontalIcon,
+  LinkIcon,
   Loader2Icon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -78,6 +79,7 @@ import {
 import { usePlaybackStore } from "@/lib/store/playback";
 import type { ShelfItem } from "@/lib/innertube/types";
 import { syncLastfmLove } from "@/lib/lastfm";
+import { copyToClipboard, trackUrl } from "@/lib/share";
 
 type TrackContext = {
   tracks: ShelfItem[];
@@ -434,6 +436,18 @@ export function TrackMenuItems({
           Go to album
         </Item>
       )}
+
+      <Separator />
+      <Item
+        onSelect={async () => {
+          const ok = await copyToClipboard(trackUrl(item.id));
+          if (ok) toast.success("Link copied");
+          else toast.error("Couldn't copy the link");
+        }}
+      >
+        <LinkIcon />
+        Copy link
+      </Item>
     </>
   );
 }

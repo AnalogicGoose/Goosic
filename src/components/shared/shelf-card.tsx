@@ -159,6 +159,7 @@ export function ShelfCard({ item, className }: Props) {
         className={cn(
           "relative w-full",
           isVideo ? "aspect-video" : "aspect-square",
+          !item.round && "squircle-cover-frame",
         )}
       >
         <Thumbnail
@@ -174,6 +175,7 @@ export function ShelfCard({ item, className }: Props) {
           className={cn(
             "pointer-events-none absolute inset-0 border border-hairline",
             radiusClass,
+            !item.round && "squircle-cover-overlay",
           )}
         />
         {hidden ? (
@@ -185,6 +187,7 @@ export function ShelfCard({ item, className }: Props) {
               className={cn(
                 "pointer-events-none absolute inset-0 bg-background/60",
                 radiusClass,
+                !item.round && "squircle-cover-overlay",
               )}
             />
             <div

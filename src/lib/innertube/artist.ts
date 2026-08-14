@@ -26,14 +26,12 @@ export async function fetchArtist(id: string): Promise<ArtistPage> {
       header.foregroundThumbnail?.musicThumbnailRenderer?.thumbnail,
   );
 
-  const radioId: string | undefined =
-    header.startRadioButton?.buttonRenderer?.navigationEndpoint?.watchEndpoint
-      ?.videoId;
-  const shuffleId: string | undefined =
-    header.playButton?.buttonRenderer?.navigationEndpoint?.watchPlaylistEndpoint
-      ?.playlistId ??
-    header.playButton?.buttonRenderer?.navigationEndpoint?.watchEndpoint
-      ?.videoId;
+  // Play and Start-radio are separate endpoints, and each may arrive as
+  // either a playlist or a single video depending on the artist. Keeping
+  // both shapes distinct matters: a playlist id has to go through /next
+  // to become a queue, while a video id can be played directly.
+  const radioEndpoint = readWatchEndpoint(header.startRadioButton);
+  const shuffleEndpoint = readWatchEndpoint(header.playButton);
 
   const tabs: YtNode[] =
     json?.contents?.singleColumnBrowseResultsRenderer?.tabs ?? [];
@@ -54,8 +52,28 @@ export async function fetchArtist(id: string): Promise<ArtistPage> {
     description: description || undefined,
     subscribers: subscribers || undefined,
     thumbnails,
-    radioId,
-    shuffleId,
+    radioEndpoint,
+    shuffleEndpoint,
     shelves,
   };
+}
+
+/**
+ * Pull the playlist/video pair out of a header button, whichever of the
+ * two watch-endpoint shapes YouTube used. Returns undefined when the
+ * button carries neither, so callers can hide the action instead of
+ * rendering a control that cannot do anything.
+ */
+function readWatchEndpoint(
+  button: YtNode | undefined,
+): ArtistPage["radioEndpoint"] {
+  const endpoint =
+    button?.buttonRenderer?.navigationEndpoint ??
+    button?.musicPlayButtonRenderer?.playNavigationEndpoint;
+  const playlistId: string | undefined =
+    endpoint?.watchPlaylistEndpoint?.playlistId ??
+    endpoint?.watchEndpoint?.playlistId;
+  const videoId: string | undefined = endpoint?.watchEndpoint?.videoId;
+  if (!playlistId && !videoId) return undefined;
+  return { playlistId, videoId };
 }

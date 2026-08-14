@@ -78,13 +78,16 @@
 }
 
 /* Unlayered so Tailwind radius utilities cannot override the Figma geometry.
+   Tailwind v4 emits every utility inside `@layer utilities`, and an unlayered
+   rule outranks any layered one by cascade-layer precedence — which is decided
+   before specificity, so this needs no priority override to win.
    Small controls retain their component-specific pill/circle radius. */
 html.liquid-refract .glass-material:not(.glass-material-small) {
-  border-radius: 32px !important;
+  border-radius: 32px;
 }
 html.liquid-refract
   .glass-material.liquid-glass-player:not(.glass-material-small) {
-  border-radius: 9999px !important;
+  border-radius: 9999px;
   corner-shape: round;
 }
 html.liquid-refract .liquid-glass-player::before,
@@ -117,12 +120,12 @@ html body [data-slot="sidebar-container"] {
   z-index: 20;
 }
 
-/* A flush source list, not a floating card. This has to carry `!important`
-   to beat the global 32px glass radius, which is itself `!important` so that
-   Tailwind's radius utilities cannot override the Figma geometry. */
+/* A flush source list, not a floating card. Beats the global 32px glass radius
+   on specificity alone — same unlayered origin, one extra class (.sidebar-flush)
+   — and is declared after it, so no priority override is involved. */
 html.liquid-refract .glass-material.sidebar-flush:not(.glass-material-small),
 html body .sidebar-flush {
-  border-radius: 0 !important;
+  border-radius: 0;
 }
 
 /* The sidebar is a translucent overlay, not a column. Collapsing the layout
@@ -474,6 +477,26 @@ html body [data-slot="sidebar-gap"] {
     box-shadow: none;
   }
 
+  /* Performance mode's stand-in for the filter's `feTurbulence` grain pass.
+     Same parameters (fractalNoise, baseFrequency 0.8, three octaves,
+     desaturated, overlay-blended) and the same strength token, but as an image
+     the browser rasterizes once and caches, rather than three octaves of Perlin
+     noise recomputed per pixel per frame for output that never changes.
+
+     The 140px tile is not arbitrary: `stitchTiles` only seams cleanly when
+     baseFrequency * tile is an integer, and 0.8 * 140 = 112.
+
+     Scoped to `.liquid-refract` because this exists to relieve the SVG
+     renderer. macOS materials draw their own texture, and the filter still owns
+     the grain whenever the switch is off — the two must never both paint. */
+  html.liquid-refract[data-glass-performance="on"]
+    .glass-material-interactive::after {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23g)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    opacity: var(--glass-grain, 0);
+    mix-blend-mode: overlay;
+  }
+
   .glass-material-static::after {
     background: transparent;
     mix-blend-mode: normal;
@@ -802,6 +825,67 @@ html body [data-slot="sidebar-gap"] {
   .album-mesh-layer {
     transform: translateZ(0);
     isolation: isolate;
+  }
+
+  /* Album, playlist, and song artwork share Apple's continuous squircle
+     silhouette. The important flags keep caller-specific `rounded-md`/
+     `rounded-lg` utilities from changing the shared cover shape. Artist
+     artwork opts into `Thumbnail round` and remains circular. */
+  .squircle-cover,
+  .squircle-cover-frame {
+    border-radius: 60px !important;
+    corner-shape: squircle !important;
+  }
+
+  /* Explicitly mark layers that sit over a cover (play-state washes and
+     hairlines). Unlike the cover itself, these are sibling elements, so they
+     cannot inherit geometry unless their parent is a squircle-cover-frame. */
+  .squircle-cover-overlay {
+    border-radius: inherit !important;
+    corner-shape: squircle !important;
+  }
+
+  /* Match the Ultra thin glass rim on every square artwork cover. The mask
+     keeps the highlight on the edge instead of washing over the artwork. */
+  .squircle-cover::after {
+    position: absolute;
+    inset: 0;
+    padding: 1.4px;
+    border-radius: inherit;
+    corner-shape: squircle;
+    background: linear-gradient(
+      157deg,
+      rgb(255 255 255 / 40%) 2.12%,
+      rgb(255 255 255 / 0%) 39%,
+      rgb(255 255 255 / 0%) 54.33%,
+      rgb(255 255 255 / 10%) 93.02%
+    );
+    pointer-events: none;
+    content: "";
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+
+  /* The immersive-player cover uses the same shared rim rather than a flat
+     `border-hairline`. Lift that pseudo-element over its absolutely-positioned
+     image layers so the Ultra thin outline stays visible at large sizes. */
+  .fullscreen-cover-rim::after {
+    z-index: 1;
+  }
+
+  /* The normal app and floating-player backdrop is intentionally one static
+     image layer. The procedural mesh below is only mounted by the immersive
+     player, so its animated blur stack cannot tax browsing performance. */
+  .album-cover-background {
+    filter: blur(clamp(36px, 5vw, 88px)) saturate(112%);
+    transform: translateZ(0) scale(1.04);
+    will-change: opacity;
   }
 
   /* Transparent passthrough: the grid keeps filling the layer exactly as it

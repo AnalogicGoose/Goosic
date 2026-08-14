@@ -90,5 +90,44 @@ export async function fetchAlbum(id: string): Promise<AlbumPage> {
     duration: durationMatch,
     thumbnails,
     tracks,
+    audioPlaylistId: extractAudioPlaylistId(json, header),
   };
+}
+
+/**
+ * Find the album's `OLAK5uy_…` playlist id. The header's play button
+ * carries it in every layout we've seen, but the exact nesting differs
+ * between the detail and responsive headers — and some responses only
+ * expose it on a track row's watch endpoint. Try each in turn and accept
+ * only an id with the audio-playlist shape, so a radio (`RDAMPL…`) or a
+ * browse id can never be mistaken for one.
+ */
+function extractAudioPlaylistId(
+  json: YtNode,
+  header: YtNode,
+): string | undefined {
+  const buttons: YtNode[] = [
+    ...((header.buttons ?? []) as YtNode[]),
+    ...((header.playButton ? [header.playButton] : []) as YtNode[]),
+  ];
+  const candidates: (string | undefined)[] = [];
+
+  for (const button of buttons) {
+    const renderer =
+      button?.musicPlayButtonRenderer ?? button?.buttonRenderer ?? button;
+    candidates.push(
+      renderer?.playNavigationEndpoint?.watchPlaylistEndpoint?.playlistId,
+      renderer?.playNavigationEndpoint?.watchEndpoint?.playlistId,
+      renderer?.navigationEndpoint?.watchPlaylistEndpoint?.playlistId,
+      renderer?.navigationEndpoint?.watchEndpoint?.playlistId,
+    );
+  }
+  candidates.push(json?.microformat?.microformatDataRenderer?.urlCanonical);
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const match = candidate.match(/OLAK5uy_[A-Za-z0-9_-]+/);
+    if (match) return match[0];
+  }
+  return undefined;
 }

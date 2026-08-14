@@ -4,8 +4,8 @@
 > engineering, UI, release, and troubleshooting context for this repository.
 >
 > Last verified: **2026-08-13**
-> Current app version: **0.6.0**
-> Current release candidate: **v0.6.0 macOS-accurate glass material**
+> Current app version: **0.7.1**
+> Current release candidate: **v0.7.1 release preparation**
 > Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.5.8>
 
 ## 1. New-session quick start
@@ -83,6 +83,11 @@ Current major capabilities:
 - Artist, album, playlist, and category pages.
 - Likes, playlists, library mutations, radios, autoplay/recommendations, and
   song/video source switching.
+- Full playlist management: create an empty playlist from Library, rename,
+  edit description, change privacy, delete, save someone else's playlist or an
+  album to the library, and save the current queue as a playlist.
+- Artist header actions: Play, Shuffle, Start radio, and Follow/Unfollow.
+- Copy-link actions on tracks, playlists, albums, and artists.
 - Right-side, bottom, and separate floating player layouts.
 - Synced lyrics from LRCLIB, Musixmatch, and Genius.
 - Multiple YouTube account/channel support.
@@ -210,8 +215,9 @@ native observer bridge.
 - `src/components/layout/player-more-menu.tsx` â€” player action menu.
 - `src/components/layout/queue-panel.tsx` â€” queue/history surface.
 - `src/components/layout/lyrics-view.tsx` â€” synced lyrics and lyric scrolling.
-- `src/components/layout/now-playing-background.tsx` â€” the album-derived
-  procedural color mesh, the only ambient background.
+- `src/components/layout/now-playing-background.tsx` â€” the current-cover
+  backdrop: a low-cost blurred image in normal windows and the album-derived
+  procedural color mesh only in the immersive player.
 - `src/components/layout/update-banner.tsx` â€” updater progress/action surface.
 
 ### Shared content components
@@ -222,6 +228,19 @@ native observer bridge.
   shelves, navigation arrows, edge fading, and scrolling.
 - `src/components/shared/track-list.tsx` â€” track table/list rendering.
 - `src/components/shared/track-context-menu.tsx` â€” track actions and submenus.
+- `src/components/shared/playlist-dialogs.tsx` â€” create/edit/delete playlist
+  dialogs. All three invalidate `user-playlists`, `library`, and
+  `playlist-pages` together so the sidebar, Library grid, "Add to playlist"
+  submenu, and any open playlist route update at once. Both dialogs seed their
+  fields on the open transition only; their props come from live queries and a
+  background refetch mid-edit would otherwise discard the user's typing.
+- `src/components/shared/playlist-actions-menu.tsx` â€” playlist/album overflow
+  menu (library save, radio, copy link, owner-only edit/delete). Albums pass
+  their `OLAK5uy_â€¦` audio playlist as `playlistId` but their `MPREb_â€¦` browse
+  id as `libraryId`: YouTube saves an album through the playlist-rating
+  endpoint yet lists it in the albums shelf under the browse id, so one id
+  cannot serve both roles.
+- `src/components/shared/artist-actions.tsx` â€” artist Follow toggle and menu.
 - `src/components/shared/artist-links.tsx` â€” reusable clickable artist names.
 - `src/components/shared/thumbnail.tsx` â€” image sizing/high-resolution helpers.
 
@@ -267,6 +286,13 @@ native observer bridge.
 - `src/lib/store/playlist-downloads.ts` â€” sequential explicit playlist
   download coordinator and persisted playlist manifests.
 - `src/lib/updater.ts` and `src/lib/store/update.ts` â€” update state machine.
+- `src/lib/library-membership.ts` â€” saved-playlist/album, followed-artist, and
+  owned-playlist id sets, derived from the `["library", â€¦]` and
+  `["user-playlists"]` caches the Library route already fills.
+- `src/lib/share.ts` â€” canonical music.youtube.com URLs plus clipboard access.
+  Goosic ships no clipboard plugin, so this uses the WebView clipboard API
+  with an `execCommand` fallback for WebKitGTK and reports genuine failures
+  instead of showing a success toast that lied.
 - `src/lib/lyrics/` â€” lyrics providers, matching, and LRC parsing.
 - `src/lib/lastfm.ts` and `lastfm-scrobbler.ts` â€” frontend Last.fm behavior.
 
@@ -419,6 +445,16 @@ native observer bridge.
 - Song cards need enough internal padding that the artwork and text do not
   collide with rounded corners. Keep the artwork slightly inset rather than
   growing the entire card.
+- Square album, song, and playlist artwork uses `border-radius: 24px` with
+  `corner-shape: squircle` through the shared `Thumbnail`; circular artist art
+  remains circular. Square artwork also carries the shared 1.4px masked glass
+  rim used by the Ultra thin material. Hover/play-state cover overlays must use
+  `squircle-cover-frame` and `squircle-cover-overlay` too: they are sibling
+  layers, so they do not inherit the thumbnail's shape on their own.
+- The immersive player's large cover uses the same masked rim (not a separate
+  flat `border-hairline`) through `fullscreen-cover-rim`.
+- Explore's three top navigation tiles are visual surfaces rather than the grid
+  that lays them out; each uses the same squircle and masked rim as cover art.
 - Circular artist art remains circular. Album/playlist/song geometry may use
   semantic radius utilities, which currently resolve through the 34px token.
 
@@ -454,6 +490,8 @@ the content/album background remains visible beneath it.
   specific information hierarchy truly requires one.
 - Submenus must be separately portaled glass panels with spacing from the
   parent. Do not render them inside an overflow-clipped parent menu.
+- The inline Search suggestions dropdown uses `MENU_GLASS_SURFACE_CLASS`, the
+  same 34px clipped glass shell as portaled menus, with inset pill highlights.
 - Preserve `menu-shell-clip`, `menu-scroll`, and `app-scroll`. They prevent rows
   and native scrollbar paint from escaping 34px menu corners.
 
@@ -478,9 +516,12 @@ the content/album background remains visible beneath it.
   the in-window immersive player. It is the existing `PlayerBar` with the
   `fullscreen` variant: cover/metadata/progress/transport on the left, the
   existing synchronized `LyricsBody` on the right, and the existing
-  `NowPlayingBackground` behind both. Clicking the large cover, pressing Escape,
-  or using the minimize button exits. Do not replace this with a second WebView
-  or duplicate player/audio component.
+  `NowPlayingBackground` behind both. The immersive surface covers the whole
+  app viewport; the fixed title bar stays above it for dragging and caption
+  controls. Its Queue header must use its title-bar safe inset so actions do
+  not sit beneath Windows caption buttons. Clicking the large cover, pressing
+  Escape, or using the minimize button exits. Do not replace this with a second WebView or duplicate
+  player/audio component.
 - The right/floating player and bottom player should share the same background
   and glass material decisions where the platform implementation permits it.
   The first native Liquid Glass pass intentionally applies only to the
@@ -562,22 +603,24 @@ than copied source code.
   the percentage mask/blur stack there cuts wrapped lines and can paint a hard
   rectangular band in WKWebView.
 
-## 8. Dynamic album mesh
+## 8. Current-track background
 
-The album mesh is the ambient background. It is no longer an experiment and has
-no toggle of its own: the only related preference is
+The current cover is the ambient background. It has no mesh toggle: the only
+related preference is
 
 ```text
 Settings â†’ Appearance â†’ Background   (Ambient | Plain)
 ```
 
-`background` in `src/lib/store/settings.ts` decides whether an ambient
-background renders at all; when it is `ambient`, the mesh is what renders.
+`background` in `src/lib/store/settings.ts` decides whether a normal window
+renders a background at all; when it is `ambient`, it shows a static blurred
+version of the current cover. The procedural mesh is mounted only behind the
+immersive full-screen player, where its motion is intentional rather than a
+continuous browsing cost.
 
-The older blurred-cover treatment is **gone** — not demoted to a fallback,
-deleted. The cover is a color source only and is never displayed as artwork by
-the background, so nothing in `now-playing-background.tsx` scales or blurs the
-image. Do not reintroduce it, as either a mode or a fallback.
+The regular blurred-cover treatment is deliberate: it displays the artwork but
+does not canvas-sample it, generate a palette, or animate a mesh. Keep it as a
+single oversized, blurred image layer.
 
 The retired `dynamicAlbumMesh` preference is stripped from persisted settings by
 `stripRetiredSettings`, which both `migrate` and `merge` call. `merge` matters
@@ -1410,7 +1453,7 @@ Important examples:
 - close button hides to tray;
 - offline media changes only through explicit playlist downloads or Storage
   removal actions;
-- ambient background (the album mesh; there is no separate mesh toggle);
+- ambient background (a blurred current cover; the mesh is immersive-only);
 - playback notifications off;
 - Discord Rich Presence off;
 - Last.fm off until connected.
@@ -1449,6 +1492,11 @@ persisted and synchronized across native windows.
 - Rich Presence and notification behavior should remain user-controlled.
 
 ## 18. Recent release history
+
+- **`v0.7.1`** â€” lowers normal browsing cost by reserving the animated album
+  mesh for immersive now playing, adds blurred-cover backdrops, complete
+  playlist and artist management, refined playback guards, and a unified
+  squircle/rim treatment for artwork and related glass surfaces.
 
 - **`v0.6.0`** — tunes Windows Liquid Glass to the macOS reference: Clear uses
   1px frost, all Windows glass surfaces share round K=1 corners and matching
@@ -1526,7 +1574,7 @@ At the time this document was last refreshed:
   Existing downloads remain intact and visible; invalid/legacy entries are
   marked for repair or explicit
   deletion instead of being silently removed. The working tree version is
-  `0.6.0` until this release is explicitly prepared and published.
+  `0.7.1` until this release is explicitly prepared and published.
 - `v0.4.6` is public with Windows, Linux, and universal macOS artifacts. It
   adds shared sidebar glass, Default/Modern bottom-player layouts, global glass
   material controls, native drag prevention, and lower WebView2 memory use.

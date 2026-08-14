@@ -8,6 +8,7 @@ import {
   XIcon,
   Trash2Icon,
   RadioIcon,
+  ListPlusIcon,
 } from "lucide-react";
 import {
   Popover,
@@ -24,6 +25,7 @@ import { AnimatedTabs } from "@/components/ui/animated-tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Thumbnail } from "@/components/shared/thumbnail";
 import { ArtistLinks } from "@/components/shared/artist-links";
+import { CreatePlaylistDialog } from "@/components/shared/playlist-dialogs";
 import { usePlaybackStore, currentTrack } from "@/lib/store/playback";
 import { cn } from "@/lib/utils";
 
@@ -43,7 +45,14 @@ type Tab = "queue" | "history";
  * overlay inside the player card (right/floating variants) or a
  * Popover anchored to the queue button (bottom-bar variant).
  */
-export function QueueBody({ onClose }: { onClose?: () => void }) {
+export function QueueBody({
+  onClose,
+  topInset = false,
+}: {
+  onClose?: () => void;
+  /** Keep full-viewport queues below the Windows caption buttons. */
+  topInset?: boolean;
+}) {
   const { queue, index, playing, autoRadio, advertisement } = usePlaybackStore(
     useShallow((s) => ({
       queue: s.queue,
@@ -73,9 +82,24 @@ export function QueueBody({ onClose }: { onClose?: () => void }) {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
 
+  const [saveOpen, setSaveOpen] = useState(false);
+  // Snapshotted when the dialog opens: the queue can keep advancing (and
+  // auto-radio keeps appending) while the user is typing a name, and the
+  // playlist should hold what they saw when they pressed the button.
+  const [queueSnapshot, setQueueSnapshot] = useState<string[]>([]);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center justify-between gap-2 px-3 py-1">
+      <header
+        className={cn(
+          "flex shrink-0 items-center justify-between gap-2 px-3 py-1",
+          // The immersive player fills the entire viewport while the fixed
+          // Windows title bar remains above it. Its queue header therefore
+          // needs this safe area; right/floating players already start below
+          // their own title bars.
+          topInset && "pt-[calc(var(--titlebar-h)+0.25rem)]",
+        )}
+      >
         {/* The tabs already provide a built-in underline; override its
             own border-b so it doesn't double up with the header's
             bottom hairline. The header padding is also reduced
@@ -105,6 +129,23 @@ export function QueueBody({ onClose }: { onClose?: () => void }) {
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">Autoplay</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Save queue as playlist"
+                disabled={queue.length === 0}
+                onClick={() => {
+                  setQueueSnapshot(queue.map((t) => t.videoId));
+                  setSaveOpen(true);
+                }}
+              >
+                <ListPlusIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Save as playlist</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -165,6 +206,13 @@ export function QueueBody({ onClose }: { onClose?: () => void }) {
           )}
         </div>
       </ScrollArea>
+
+      <CreatePlaylistDialog
+        open={saveOpen}
+        onOpenChange={setSaveOpen}
+        defaultTitle={active?.title ? `${active.title} queue` : "Goosic queue"}
+        videoIds={queueSnapshot}
+      />
     </div>
   );
 }
@@ -499,7 +547,7 @@ function QueueRow({
           image-drag instead of our row reorder). Disabling pointer
           events on the wrapper makes the thumbnail transparent to
           mouse/drag events, so they bubble straight to the row. */}
-      <div className="pointer-events-none relative size-10 shrink-0 overflow-hidden rounded-md">
+      <div className="squircle-cover-frame pointer-events-none relative size-10 shrink-0 overflow-hidden">
         <Thumbnail
           thumbnails={track.thumbnails}
           alt={track.title}
@@ -508,7 +556,7 @@ function QueueRow({
         />
         <span
           className={cn(
-            "absolute inset-0 flex items-center justify-center bg-black/50 text-white",
+            "squircle-cover-overlay absolute inset-0 flex items-center justify-center bg-black/50 text-white",
             active ? "opacity-100" : "opacity-0 group-hover:opacity-100",
           )}
         >
@@ -529,7 +577,7 @@ function QueueRow({
             against both the cover and the bg-black/50 hover wash. */}
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 rounded-md border border-white opacity-10 mix-blend-difference"
+          className="squircle-cover-overlay pointer-events-none absolute inset-0 border border-white opacity-10 mix-blend-difference"
         />
       </div>
 

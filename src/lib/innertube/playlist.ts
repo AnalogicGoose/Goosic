@@ -51,6 +51,47 @@ function extractHeader(json: YtNode): YtNode {
   return result ?? {};
 }
 
+/**
+ * YouTube only serves `musicEditablePlaylistDetailHeaderRenderer` for
+ * playlists the signed-in account owns, and that renderer is also the
+ * only place the current privacy value appears. Both facts come from the
+ * same node, so read them together: an editable playlist always has a
+ * privacy we can display, and a non-editable one must show neither an
+ * edit action nor a guessed visibility.
+ */
+function extractEditableDetails(json: YtNode): {
+  editable: boolean;
+  privacy?: PlaylistPage["privacy"];
+} {
+  const seen = new WeakSet<object>();
+  let found: YtNode | null = null;
+  const walk = (node: unknown) => {
+    if (found || !node || typeof node !== "object") return;
+    if (seen.has(node as object)) return;
+    seen.add(node as object);
+    if (Array.isArray(node)) {
+      for (const c of node) walk(c);
+      return;
+    }
+    const n = node as YtNode;
+    if (n.musicEditablePlaylistDetailHeaderRenderer) {
+      found = n.musicEditablePlaylistDetailHeaderRenderer;
+      return;
+    }
+    for (const k of Object.keys(n)) walk(n[k]);
+  };
+  walk(json);
+  if (!found) return { editable: false };
+
+  const raw: unknown = (found as YtNode).editHeader
+    ?.musicPlaylistEditHeaderRenderer?.privacy;
+  const privacy =
+    raw === "PUBLIC" || raw === "PRIVATE" || raw === "UNLISTED"
+      ? raw
+      : undefined;
+  return { editable: true, privacy };
+}
+
 /** First page plus the continuation pointer for the next one. */
 export type PlaylistFirstPage = PlaylistPage & {
   continuationToken?: string;
@@ -246,6 +287,7 @@ export async function fetchPlaylistFirstPage(
   }
 
   const header = extractHeader(json);
+  const { editable, privacy } = extractEditableDetails(json);
   const title = readRuns(header.title);
   const description = readRuns(header.description);
   let thumbnails = readThumbnails(
@@ -313,6 +355,8 @@ export async function fetchPlaylistFirstPage(
     thumbnails,
     tracks,
     continuationToken,
+    editable,
+    privacy,
   };
 }
 

@@ -12,6 +12,11 @@ export default tseslint.config(
     ignores: [
       "dist",
       "src-tauri/target",
+      // Patched upstream crates (see the [patch.crates-io] block in
+      // src-tauri/Cargo.toml). Third-party sources we vendor verbatim so the
+      // diff against upstream stays reviewable — linting them to our own house
+      // rules would bury real findings under ~180 imported errors.
+      "src-tauri/vendor",
       "src/routeTree.gen.ts",
       "node_modules",
       "scripts",

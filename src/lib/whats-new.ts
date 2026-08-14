@@ -38,6 +38,34 @@ export type WhatsNewEntry = {
  */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: "0.7.1",
+    date: "August 2026",
+    sections: [
+      {
+        heading: "A cleaner now playing experience",
+        items: [
+          "The animated album-colour mesh now appears only in the immersive player. Everywhere else uses a calmer blurred version of the current cover, which cuts the background cost while browsing.",
+          "The immersive player now covers the entire app window, including the area behind the title bar, and its Queue controls stay clear of the Windows caption buttons.",
+          "Album, song, and playlist artwork now shares continuous squircle corners and a subtle glass rim, including its hover and play-state overlays.",
+        ],
+      },
+      {
+        heading: "More complete music management",
+        items: [
+          "Create, rename, describe, change privacy, and delete playlists directly from Goosic. Save albums and playlists, or save the current queue as a playlist.",
+          "Artist pages now support Play, Shuffle, radio, and Follow. Tracks, albums, playlists, and artists can also copy their YouTube Music links.",
+        ],
+      },
+      {
+        heading: "Polish and playback fixes",
+        items: [
+          "Search suggestions now use the same Liquid Glass material as the rest of the app.",
+          "Playback more reliably stops YouTube Music's own next-track pick before it can be heard, and a frontend reload no longer leaves a stale player playing in the background.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.7.0",
     date: "August 2026",
     sections: [

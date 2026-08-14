@@ -19,9 +19,9 @@ export type BackgroundMode = "ambient" | "plain";
 type State = {
   /** What the title-bar ✕ does: hide to tray (default) or quit. */
   closeAction: CloseButtonAction;
-  /** Window backdrop: "ambient" animates the album-derived color mesh,
-   *  "plain" keeps the flat theme background. This is the only background
-   *  preference; the mesh is no longer one of two ambient treatments. */
+  /** Window backdrop: "ambient" shows static blurred current-track artwork;
+   *  "plain" keeps the flat theme background. The animated mesh is reserved
+   *  for the immersive player and is not a preference. */
   background: BackgroundMode;
   /** The semantic visual child theme. Components consume the same token
    *  contract; this value only selects which token set is mounted. */
@@ -33,6 +33,22 @@ type State = {
    *  (`-apple-visual-effect`). Ignored on platforms without it, which keep
    *  `glassBlur`. See `useGlassMaterial`. */
   glassMaterial: GlassMaterialId;
+  /**
+   * Drop the most expensive optical passes from the Windows glass renderer.
+   *
+   * Only the SVG renderer is affected — macOS draws a real system material and
+   * the Classic (`blur-*`) stops already take a plain CSS blur, so neither has
+   * anything to trade. On Windows the full material is a 45-primitive filter
+   * graph re-evaluated as a `backdrop-filter` every time the backdrop moves,
+   * and Chromium runs reference filters on the CPU: it is the whole reason the
+   * app can peg a core while the GPU idles. See `liquid-glass-defs.tsx`.
+   *
+   * Defaults on. The passes it removes are refinements — broad colour and
+   * luminance contamination, chromatic splay, per-frame grain — and the
+   * material still reads as glass without them, so paying that cost by default
+   * is the wrong trade for anyone who has not asked for it.
+   */
+  glassPerformanceMode: boolean;
   /** System toast on track change while the app is in the background
    *  (see `lib/playback-notifications.ts`). */
   playbackNotifications: boolean;
@@ -63,6 +79,7 @@ type State = {
   setVisualTheme: (v: VisualThemeId) => void;
   setGlassBlur: (v: number) => void;
   setGlassMaterial: (v: GlassMaterialId) => void;
+  setGlassPerformanceMode: (v: boolean) => void;
   setPlaybackNotifications: (v: boolean) => void;
   setDiscordRichPresence: (v: boolean) => void;
   setLastfmEnabled: (v: boolean) => void;
@@ -114,6 +131,7 @@ export const useSettingsStore = create<State>()(
       visualTheme: "default",
       glassBlur: GLASS_BLUR_DEFAULT,
       glassMaterial: GLASS_MATERIAL_DEFAULT,
+      glassPerformanceMode: true,
       playbackNotifications: false,
       discordRichPresence: false,
       lastfmEnabled: false,
@@ -126,6 +144,8 @@ export const useSettingsStore = create<State>()(
       setVisualTheme: (visualTheme) => set({ visualTheme }),
       setGlassBlur: (v) => set({ glassBlur: clampGlassBlur(v) }),
       setGlassMaterial: (glassMaterial) => set({ glassMaterial }),
+      setGlassPerformanceMode: (glassPerformanceMode) =>
+        set({ glassPerformanceMode }),
       setPlaybackNotifications: (playbackNotifications) =>
         set({ playbackNotifications }),
       setDiscordRichPresence: (discordRichPresence) =>
@@ -149,11 +169,9 @@ export const useSettingsStore = create<State>()(
       version: 3,
       // Preferences that have been retired. They are stripped during hydration
       // so existing installs stop carrying values nothing reads any more.
-      // `dynamicAlbumMesh` chose between the album mesh and the older blurred
-      // cover; the mesh is now the only ambient treatment, and the blurred
-      // cover survives only as the automatic sampling-failure fallback. An
-      // install that had turned the mesh off gets it back, which is intended:
-      // the toggle it used no longer exists.
+      // `dynamicAlbumMesh` chose between the mesh and the blurred cover. The
+      // latter is now the regular ambient treatment, while the mesh belongs
+      // exclusively to the immersive player, so the stale toggle is ignored.
       migrate: (persisted) => {
         if (!persisted || typeof persisted !== "object") {
           return persisted as State;
@@ -185,6 +203,13 @@ export const useSettingsStore = create<State>()(
               : current.glassBlur,
           glassMaterial:
             migrateGlassMaterialId(savedMaterial) ?? current.glassMaterial,
+          // Absent on every install that predates the toggle, which is exactly
+          // the population that should get it: they are the ones running the
+          // full graph today.
+          glassPerformanceMode:
+            typeof saved?.glassPerformanceMode === "boolean"
+              ? saved.glassPerformanceMode
+              : current.glassPerformanceMode,
         };
       },
     },

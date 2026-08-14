@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import {
   ChevronDownIcon,
   DropletsIcon,
+  GaugeIcon,
   LayoutDashboardIcon,
   PaletteIcon,
   WallpaperIcon,
@@ -17,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SegmentedControl } from "@/components/ui/segmented";
+import { Switch } from "@/components/ui/switch";
 import { Group, SettingRow, TabPane } from "@/components/settings/primitives";
 import { useLayoutStore, type LayoutMode } from "@/lib/store/layout";
 import { useSettingsStore, type BackgroundMode } from "@/lib/store/settings";
@@ -28,8 +30,10 @@ import {
   isGlassMaterialId,
   supportsNativeLiquidGlass,
   VISUAL_THEMES,
+  WEB_GLASS_MATERIAL_TOKENS,
   type VisualThemeId,
 } from "@/lib/themes";
+import { isWindowsWebview } from "@/lib/platform";
 
 const LAYOUT_OPTIONS: { value: LayoutMode; label: string }[] = [
   { value: "right", label: "Side card" },
@@ -47,6 +51,10 @@ export function AppearanceTab() {
   const setVisualTheme = useSettingsStore((s) => s.setVisualTheme);
   const glassMaterial = useSettingsStore((s) => s.glassMaterial);
   const setGlassMaterial = useSettingsStore((s) => s.setGlassMaterial);
+  const glassPerformanceMode = useSettingsStore((s) => s.glassPerformanceMode);
+  const setGlassPerformanceMode = useSettingsStore(
+    (s) => s.setGlassPerformanceMode,
+  );
   const layoutMode = useLayoutStore((s) => s.mode);
   const setLayoutMode = useLayoutStore((s) => s.setMode);
   const background = useSettingsStore((s) => s.background);
@@ -57,6 +65,12 @@ export function AppearanceTab() {
   // the description can say which of the two is happening. Read once: the
   // capability cannot change while the window is open.
   const [nativeMaterial] = useState(supportsNativeLiquidGlass);
+  // The switch only means something where the SVG filter graph runs, and the
+  // Classic stops take the plain-blur path even there. Read once alongside the
+  // material capability: neither can change while the window is open.
+  const [svgRenderer] = useState(isWindowsWebview);
+  const showPerformanceMode =
+    svgRenderer && WEB_GLASS_MATERIAL_TOKENS[glassMaterial].lens !== null;
 
   return (
     <TabPane tightTop>
@@ -169,6 +183,25 @@ export function AppearanceTab() {
             </DropdownMenu>
           }
         />
+        {/* Directly under the material picker, because it qualifies it: this
+            is how much of the chosen material actually gets rendered. Hidden
+            where it would be inert — macOS draws a real system material and the
+            Classic stops are already a plain CSS blur, so neither runs the
+            filter graph this trades away. */}
+        {showPerformanceMode ? (
+          <SettingRow
+            icon={GaugeIcon}
+            title="Performance mode"
+            description="Render the glass with its most expensive passes removed. The material keeps its frost, refraction and rim light; it gives up colour bleed, chromatic edges and refraction on small controls. Turn this off for the full effect if your machine can spare it."
+            control={
+              <Switch
+                checked={glassPerformanceMode}
+                onCheckedChange={setGlassPerformanceMode}
+                aria-label="Performance mode"
+              />
+            }
+          />
+        ) : null}
         <SettingRow
           icon={LayoutDashboardIcon}
           title="Player layout"

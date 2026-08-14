@@ -148,6 +148,32 @@ export function useAudioEngine() {
     store.setPlaying(false);
   };
 
+  // Adopt-or-kill the player WebView left over from a previous page load.
+  //
+  // The official-player WebView is a separate window owned by Rust, so
+  // reloading the frontend (Ctrl+R, HMR, a crash-recovery reload) destroys
+  // this document but leaves that window alive and audible. Meanwhile the
+  // rehydrated store deliberately comes back paused (`playing: false`,
+  // `status: "idle"` — see the playback store's `onRehydrateStorage`), and the
+  // selection effect returns early for an idle restored queue without ever
+  // contacting the player. The result is a song that keeps playing with no UI
+  // that knows about it: transport controls do nothing, because Goosic's
+  // generation counter no longer matches the one that window is running.
+  //
+  // Killing it on mount makes the restored "paused" state true. Playback is
+  // never resumable across a reload anyway — the store drops `playing` and
+  // `position` by design — so there is nothing to adopt, only stale audio to
+  // stop. Runs once, before any selection effect can start a new track, and
+  // only in the main window (the floating player never mounts this hook).
+  useEffect(() => {
+    void resetWebPlayer().catch(() => {
+      // Nothing to stop is the normal case on a cold start: the command fails
+      // only when there is no player window, which is exactly the state we
+      // want. A real failure still self-corrects, because selecting a track
+      // resets the player again on its own generation.
+    });
+  }, []);
+
   // Ensure a single <audio> element exists.
   useEffect(() => {
     if (audioRef.current) return;

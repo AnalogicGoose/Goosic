@@ -183,23 +183,187 @@ export async function removeFromPlaylist(
   }
 }
 
+export type PlaylistPrivacy = "PUBLIC" | "PRIVATE" | "UNLISTED";
+
 /**
- * Create a brand-new private playlist containing the given track as
- * its first entry. Returns the new playlistId so callers can navigate
- * or show it in toasts.
+ * Browse IDs for playlists arrive VL-prefixed (`VLPL…`) while every
+ * mutating endpoint wants the bare `PL…`. Normalizing in one place keeps
+ * callers from having to know which shape they're holding.
  */
-export async function createPlaylistWithTrack(
-  title: string,
-  videoId: string,
-): Promise<string> {
-  const json = await innertubePost("playlist/create", {
-    title,
-    videoIds: [videoId],
-    privacyStatus: "PRIVATE",
+function barePlaylistId(playlistId: string): string {
+  const bare = playlistId.startsWith("VL") ? playlistId.slice(2) : playlistId;
+  if (!bare) throw new Error("Missing playlist id");
+  return bare;
+}
+
+/**
+ * `edit_playlist` answers HTTP 200 even when it refuses the edit (not the
+ * owner, stale cookies, unsupported action). Every caller must check the
+ * envelope status or the success toast lies.
+ */
+async function editPlaylist(
+  playlistId: string,
+  actions: Record<string, unknown>[],
+): Promise<void> {
+  const json = await innertubePost("browse/edit_playlist", {
+    playlistId: barePlaylistId(playlistId),
+    actions,
   });
+  const status = json?.status as string | undefined;
+  if (status && status !== "STATUS_SUCCEEDED") {
+    throw new Error(`edit_playlist failed: ${status}`);
+  }
+}
+
+/**
+ * Create a playlist. With no `videoIds` this makes an *empty* playlist,
+ * which is what the Library "New playlist" action needs — until now a
+ * playlist could only be born attached to a track. `sourcePlaylistId`
+ * asks YouTube to seed the new playlist from an existing one (duplicate).
+ *
+ * Returns the new playlistId so callers can navigate to it.
+ */
+export async function createPlaylist(
+  title: string,
+  options: {
+    description?: string;
+    privacy?: PlaylistPrivacy;
+    videoIds?: string[];
+    sourcePlaylistId?: string;
+  } = {},
+): Promise<string> {
+  const body: Record<string, unknown> = {
+    title,
+    privacyStatus: options.privacy ?? "PRIVATE",
+  };
+  if (options.description) body.description = options.description;
+  if (options.videoIds?.length) body.videoIds = options.videoIds;
+  if (options.sourcePlaylistId) {
+    body.sourcePlaylistId = barePlaylistId(options.sourcePlaylistId);
+  }
+
+  const json = await innertubePost("playlist/create", body);
   const id: string | undefined =
     (json?.playlistId as string | undefined) ??
     (json?.response?.playlistId as string | undefined);
   if (!id) throw new Error("Could not read new playlistId from response");
   return id;
+}
+
+/**
+ * Create a brand-new private playlist containing the given track as
+ * its first entry.
+ */
+export function createPlaylistWithTrack(
+  title: string,
+  videoId: string,
+): Promise<string> {
+  return createPlaylist(title, { videoIds: [videoId] });
+}
+
+/** Rename a playlist the current account owns. */
+export function renamePlaylist(
+  playlistId: string,
+  title: string,
+): Promise<void> {
+  const trimmed = title.trim();
+  if (!trimmed) throw new Error("Playlist name cannot be empty");
+  return editPlaylist(playlistId, [
+    { action: "ACTION_SET_PLAYLIST_NAME", playlistName: trimmed },
+  ]);
+}
+
+/** Replace a playlist's description. An empty string clears it. */
+export function setPlaylistDescription(
+  playlistId: string,
+  description: string,
+): Promise<void> {
+  return editPlaylist(playlistId, [
+    {
+      action: "ACTION_SET_PLAYLIST_DESCRIPTION",
+      playlistDescription: description,
+    },
+  ]);
+}
+
+/** Change a playlist's visibility. */
+export function setPlaylistPrivacy(
+  playlistId: string,
+  privacy: PlaylistPrivacy,
+): Promise<void> {
+  return editPlaylist(playlistId, [
+    { action: "ACTION_SET_PLAYLIST_PRIVACY", playlistPrivacy: privacy },
+  ]);
+}
+
+/**
+ * Append every track of one playlist to another in a single edit, rather
+ * than issuing one ACTION_ADD_VIDEO per track.
+ */
+export function addPlaylistToPlaylist(
+  targetPlaylistId: string,
+  sourcePlaylistId: string,
+): Promise<void> {
+  return editPlaylist(targetPlaylistId, [
+    {
+      action: "ACTION_ADD_PLAYLIST",
+      addedFullListId: barePlaylistId(sourcePlaylistId),
+    },
+  ]);
+}
+
+/**
+ * Permanently delete a playlist the current account owns. There is no
+ * undo on YouTube's side, so callers must confirm first.
+ */
+export async function deletePlaylist(playlistId: string): Promise<void> {
+  const json = await innertubePost("playlist/delete", {
+    playlistId: barePlaylistId(playlistId),
+  });
+  const status = json?.status as string | undefined;
+  if (status && status !== "STATUS_SUCCEEDED") {
+    throw new Error(`playlist/delete failed: ${status}`);
+  }
+}
+
+/**
+ * Save someone else's playlist — or an album, via its `OLAK5uy_…` audio
+ * playlist id — into the current account's library. YouTube Music models
+ * this as a *rating* on the playlist rather than a library mutation, which
+ * is why it reuses the same `like/*` endpoints as track likes.
+ */
+export function savePlaylistToLibrary(playlistId: string): Promise<void> {
+  return ratePlaylist("like/like", playlistId);
+}
+
+/** Undo `savePlaylistToLibrary`. */
+export function removePlaylistFromLibrary(playlistId: string): Promise<void> {
+  return ratePlaylist("like/removelike", playlistId);
+}
+
+async function ratePlaylist(
+  endpoint: "like/like" | "like/removelike",
+  playlistId: string,
+): Promise<void> {
+  await innertubePost(endpoint, {
+    target: { playlistId: barePlaylistId(playlistId) },
+  });
+}
+
+/** Follow an artist. `channelId` is the artist page's `UC…` browse id. */
+export function subscribeToArtist(channelId: string): Promise<void> {
+  return setSubscription("subscription/subscribe", channelId);
+}
+
+/** Unfollow an artist. */
+export function unsubscribeFromArtist(channelId: string): Promise<void> {
+  return setSubscription("subscription/unsubscribe", channelId);
+}
+
+async function setSubscription(
+  endpoint: "subscription/subscribe" | "subscription/unsubscribe",
+  channelId: string,
+): Promise<void> {
+  if (!channelId) throw new Error("Missing channel id");
+  await innertubePost(endpoint, { channelIds: [channelId] });
 }

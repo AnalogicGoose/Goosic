@@ -115,9 +115,7 @@ export function Thumbnail({
   // Rust side has the bytes pinned to disk) or the original `upgraded`
   // URL if the resolve failed. Stays null until the resolve completes
   // — until then the blur-up base layer is what the user sees.
-  const [resolvedUpgraded, setResolvedUpgraded] = useState<string | null>(
-    null,
-  );
+  const [resolvedUpgraded, setResolvedUpgraded] = useState<string | null>(null);
 
   useEffect(() => {
     setErrored(false);
@@ -171,7 +169,9 @@ export function Thumbnail({
     <div
       className={cn(
         "relative overflow-hidden bg-muted",
-        round ? "rounded-full" : "rounded-md",
+        // Keep circular artist artwork circular; every square artwork surface
+        // uses the shared 24px squircle treatment instead of per-call radii.
+        round ? "rounded-full" : "squircle-cover",
         className,
       )}
     >

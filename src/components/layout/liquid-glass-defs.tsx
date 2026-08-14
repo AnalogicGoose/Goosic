@@ -351,6 +351,63 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* Performance mode                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What the user-facing "Performance mode" switch actually removes.
+ *
+ * The shipping variant builds a 45-primitive filter graph per surface — five
+ * Gaussian blurs, four displacement maps, three `feImage` reads, one
+ * `feTurbulence` and eleven blends — and it runs as a `backdrop-filter`, so it
+ * is re-evaluated whenever anything behind the surface moves. Chromium does not
+ * composite reference filters on the GPU, so all of that lands on the raster
+ * threads; that is why the app can saturate a core with the GPU near idle.
+ *
+ * The four cuts below are ordered by cost-to-benefit, measured by primitive
+ * count against the shipping graph:
+ *
+ *   low-frequency branches  -10 primitives (3 of 5 blurs, 1 displacement,
+ *                               1 feImage). The wash sweep (W1-W3) was already
+ *                               recorded as near-indistinguishable on Windows,
+ *                               and both radii are absolute px evaluated inside
+ *                               a filter region padded by only `frost * 3` —
+ *                               3px on Clear — so most of that blur is computed
+ *                               and then clipped away.
+ *   chromatic dispersion     -6 primitives. Three displacement samples of one
+ *                               source, recombined. Visible on the player bar
+ *                               at the extreme edge; invisible everywhere else.
+ *   grain                    -4 primitives, including the single most expensive
+ *                               one. `feTurbulence` is three octaves of Perlin
+ *                               noise per pixel per frame for an image that
+ *                               never changes, so it moves to a static CSS
+ *                               overlay instead of being dropped.
+ *   small controls           the whole graph, per control. A 36px icon button
+ *                               ran the same 45 primitives as the sidebar for a
+ *                               bezel a few pixels wide.
+ *
+ * Nothing here is a new look; it is the same material with its refinements
+ * removed. Turning the switch off restores the graph exactly as calibrated.
+ */
+export type GlassPerformanceConfig = {
+  /** Drop the colour wash, luminance wash, and the low-res sampling that feeds them. */
+  dropLowFrequency: boolean;
+  /** Collapse the three chromatic displacement samples to one. */
+  dropDispersion: boolean;
+  /** Move surface grain out of the filter and onto a static CSS overlay. */
+  cssGrain: boolean;
+  /** Give small controls the plain blur path instead of a refraction graph. */
+  cheapSmallControls: boolean;
+};
+
+export const GLASS_PERFORMANCE_CONFIG: GlassPerformanceConfig = {
+  dropLowFrequency: true,
+  dropDispersion: true,
+  cssGrain: true,
+  cheapSmallControls: true,
+};
+
 /**
  * Hardening curve applied to the bezel mask.
  *
@@ -393,21 +450,52 @@ type SurfaceRegistration = {
   geometry: string | null;
 };
 
+/**
+ * One raster carries both optical maps.
+ *
+ * They used to be two same-sized images, and between them they wasted half
+ * their channels: displacement writes R and G, leaving B pinned at 128 and A at
+ * 255, while the specular map is white everywhere and varies only in A. Packing
+ * the specular alpha into the displacement map's free B channel makes them one
+ * image — half the decoded RGBA held in the renderer's image cache, one fewer
+ * `feImage` per filter, and one fewer canvas and PNG encode per build.
+ *
+ * The channels survive the PNG round-trip exactly (verified over a full raster,
+ * zero mismatches). They have to: packing keeps A at 255 everywhere, so nothing
+ * goes through a premultiply, which is a precision improvement over the old
+ * specular map rather than a risk.
+ */
 type MaterialMaps = {
-  displacement: string;
-  specular: string;
+  /** R,G = displacement vector. B = specular rim alpha. A = 255. */
+  optics: string;
   maximumDisplacement: number;
+  /** Decoded footprint of this entry, for the cache's byte budget. */
+  bytes: number;
 };
 
 const mapCache = new Map<string, MaterialMaps>();
 // feImage stretches the vector field to the panel's exact dimensions, so
-// Full-window rasters only waste memory. Bound map resolution and resize
-// history: sixteen worst-case displacement maps total roughly
-// 16 MiB of raw RGBA data before PNG compression.
+// full-window rasters only waste memory.
 // 512px keeps ultra-wide player maps tall enough for a clean optical edge;
 // small menus remain native-resolution.
 const MAX_MAP_RASTER_SIZE = 512;
-const MAX_CACHED_MAPS = 16;
+/**
+ * Cache budgets in decoded bytes rather than entry counts.
+ *
+ * A count is the wrong unit here: these maps range from a 36x36 icon control to
+ * a 512x370 dialog, a 145x spread, so "sixteen entries" described anything from
+ * 160KB to 12MB and only ever bounded the number of allocations. The budget
+ * bounds what it is actually trying to bound.
+ */
+const MAX_MAP_CACHE_BYTES = 8 * 1024 * 1024;
+/**
+ * The quantise maps get their own, tighter budget. They cannot be capped the
+ * way the optics maps are — a block has to be a fixed number of *screen* pixels
+ * or the same variant describes a different visual state on every surface, so
+ * they are necessarily 1:1 and individually larger than the optics map for the
+ * same panel. Performance mode never builds one.
+ */
+const MAX_QUANTISE_CACHE_BYTES = 4 * 1024 * 1024;
 export const FIGMA_SPECULAR_ANGLE_DEGREES = -101;
 export const FIGMA_SPECULAR_RIM_WIDTH = 2.25;
 const SPECULAR_LIGHT_ANGLE = (FIGMA_SPECULAR_ANGLE_DEGREES * Math.PI) / 180;
@@ -533,21 +621,14 @@ function createMaps(
   const profile = createConvexRefractionProfile(lens.refraction);
   const specularRimWidth = Math.max(1, FIGMA_SPECULAR_RIM_WIDTH * rasterScale);
 
-  const displacementCanvas = document.createElement("canvas");
-  displacementCanvas.width = rasterWidth;
-  displacementCanvas.height = rasterHeight;
-  const displacementContext = displacementCanvas.getContext("2d");
-  if (!displacementContext) {
+  const opticsCanvas = document.createElement("canvas");
+  opticsCanvas.width = rasterWidth;
+  opticsCanvas.height = rasterHeight;
+  const opticsContext = opticsCanvas.getContext("2d");
+  if (!opticsContext) {
     throw new Error("Canvas 2D is unavailable for Liquid Glass maps");
   }
-  const displacementImage = displacementContext.createImageData(
-    rasterWidth,
-    rasterHeight,
-  );
-  const specularImage = displacementContext.createImageData(
-    rasterWidth,
-    rasterHeight,
-  );
+  const opticsImage = opticsContext.createImageData(rasterWidth, rasterHeight);
   const epsilon = 0.75;
 
   for (let y = 0; y < rasterHeight; y += 1) {
@@ -627,40 +708,29 @@ function createMaps(
         specularAlpha = Math.round(255 * Math.pow(rim, 1.35) * alignment ** 2);
       }
 
-      displacementImage.data[offset] = red;
-      displacementImage.data[offset + 1] = green;
-      displacementImage.data[offset + 2] = 128;
-      displacementImage.data[offset + 3] = 255;
-      specularImage.data[offset] = 255;
-      specularImage.data[offset + 1] = 255;
-      specularImage.data[offset + 2] = 255;
-      specularImage.data[offset + 3] = specularAlpha;
+      // R,G carry the displacement vector; B carries the specular rim that used
+      // to need a second raster of its own. Alpha stays opaque so no channel
+      // ever goes through a premultiply.
+      opticsImage.data[offset] = red;
+      opticsImage.data[offset + 1] = green;
+      opticsImage.data[offset + 2] = specularAlpha;
+      opticsImage.data[offset + 3] = 255;
     }
   }
 
-  displacementContext.putImageData(displacementImage, 0, 0);
-  const specularCanvas = document.createElement("canvas");
-  specularCanvas.width = rasterWidth;
-  specularCanvas.height = rasterHeight;
-  const specularContext = specularCanvas.getContext("2d");
-  if (!specularContext) {
-    throw new Error("Canvas 2D is unavailable for Liquid Glass highlights");
-  }
-  specularContext.putImageData(specularImage, 0, 0);
+  opticsContext.putImageData(opticsImage, 0, 0);
   const maps = {
-    displacement: displacementCanvas.toDataURL("image/png"),
-    specular: specularCanvas.toDataURL("image/png"),
+    optics: opticsCanvas.toDataURL("image/png"),
     // feImage already stretches the lower-resolution vector field to the
     // panel's exact CSS size. Scaling displacement again by 1/rasterScale
     // pulls the optical edge far inside large player surfaces.
     maximumDisplacement: profile.maximumDisplacement,
+    bytes: rasterWidth * rasterHeight * 4,
   };
   // Release the temporary backing store now instead of waiting for renderer
   // GC after every resize or newly opened glass surface.
-  displacementCanvas.width = 1;
-  displacementCanvas.height = 1;
-  specularCanvas.width = 1;
-  specularCanvas.height = 1;
+  opticsCanvas.width = 1;
+  opticsCanvas.height = 1;
   return maps;
 }
 
@@ -712,7 +782,36 @@ function createQuantiseMap(
   return url;
 }
 
-const quantiseCache = new Map<string, string>();
+type QuantiseEntry = { url: string; bytes: number };
+const quantiseCache = new Map<string, QuantiseEntry>();
+
+/**
+ * Evict least-recently-used entries until the cache fits its byte budget.
+ *
+ * Both caches are insertion-ordered Maps refreshed on every hit, so the first
+ * key is always the coldest. The budget is on decoded RGBA rather than on the
+ * PNG data URLs: the strings are the small half by a wide margin — a dialog's
+ * map is ~23KB of base64 against ~740KB decoded — so bounding the strings would
+ * bound the wrong thing by a factor of thirty.
+ *
+ * One entry always survives, however large. A budget that could evict the map a
+ * surface is about to use would rebuild it on the next frame forever.
+ */
+function evictToBudget<T>(
+  cache: Map<string, T>,
+  budget: number,
+  sizeOf: (entry: T) => number,
+): void {
+  let total = 0;
+  for (const entry of cache.values()) total += sizeOf(entry);
+  while (total > budget && cache.size > 1) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    const entry = cache.get(oldest);
+    if (entry !== undefined) total -= sizeOf(entry);
+    cache.delete(oldest);
+  }
+}
 
 /**
  * A quantise map sized to the surface, so a block is a fixed number of screen
@@ -740,15 +839,15 @@ function getQuantiseMap(
   if (cached) {
     quantiseCache.delete(key);
     quantiseCache.set(key, cached);
-    return cached;
+    return cached.url;
   }
-  const map = createQuantiseMap(bucketWidth, bucketHeight, block);
-  quantiseCache.set(key, map);
-  if (quantiseCache.size > MAX_CACHED_MAPS) {
-    const oldest = quantiseCache.keys().next().value;
-    if (oldest !== undefined) quantiseCache.delete(oldest);
-  }
-  return map;
+  const entry: QuantiseEntry = {
+    url: createQuantiseMap(bucketWidth, bucketHeight, block),
+    bytes: bucketWidth * bucketHeight * 4,
+  };
+  quantiseCache.set(key, entry);
+  evictToBudget(quantiseCache, MAX_QUANTISE_CACHE_BYTES, (e) => e.bytes);
+  return entry.url;
 }
 
 function getCachedMaps(
@@ -769,11 +868,7 @@ function getCachedMaps(
 
   const maps = createMaps(width, height, radius, superellipseK, lens);
   mapCache.set(key, maps);
-  while (mapCache.size > MAX_CACHED_MAPS) {
-    const oldestKey = mapCache.keys().next().value;
-    if (oldestKey === undefined) break;
-    mapCache.delete(oldestKey);
-  }
+  evictToBudget(mapCache, MAX_MAP_CACHE_BYTES, (entry) => entry.bytes);
   return maps;
 }
 
@@ -806,6 +901,7 @@ function appendFilter(
   grain: number,
   frameTint: number,
   sheen: number,
+  performance: boolean,
 ): void {
   const filter = svgElement("filter");
   setAttributes(filter, {
@@ -827,8 +923,12 @@ function appendFilter(
 
   // Whichever contamination stage runs last owns the final `dispersed` name, so
   // the frost/refraction composite lands in an intermediate when either is on.
-  const washOn = GLASS_COLOR_WASH_STRENGTH > 0;
-  const lumaOn = GLASS_LUMA_WASH_STRENGTH > 0;
+  // Performance mode drops both low-frequency branches, which also strands the
+  // low-res sampling stage below: it exists only to feed them.
+  const dropLowFrequency =
+    performance && GLASS_PERFORMANCE_CONFIG.dropLowFrequency;
+  const washOn = !dropLowFrequency && GLASS_COLOR_WASH_STRENGTH > 0;
+  const lumaOn = !dropLowFrequency && GLASS_LUMA_WASH_STRENGTH > 0;
   const bodyResult = washOn || lumaOn ? "body_mix" : "dispersed";
   // Both low-frequency branches read this. On the full-resolution frost by
   // default; on a coarsely point-sampled backdrop when a block size is set.
@@ -894,7 +994,7 @@ function appendFilter(
   // displacement that renders as a hard garbage seam.
   const displacementImage = svgElement("feImage");
   setAttributes(displacementImage, {
-    href: maps.displacement,
+    href: maps.optics,
     x: -1,
     y: -1,
     width: width + 2,
@@ -937,41 +1037,58 @@ function appendFilter(
   };
 
   filter.append(blur, saturate, displacementImage);
-  appendChannel(
-    "red",
-    baseScale + channelSplay,
-    "1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0",
-  );
-  appendChannel(
-    "green",
-    baseScale,
-    "0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0",
-  );
-  appendChannel(
-    "blue",
-    Math.max(0, baseScale - channelSplay),
-    "0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0",
-  );
-  const redGreen = svgElement("feBlend");
-  setAttributes(redGreen, {
-    in: "red_channel",
-    in2: "green_channel",
-    mode: "screen",
-    "color-interpolation-filters": mixSpace,
-    result: "red_green",
-  });
-  const dispersed = svgElement("feBlend");
-  setAttributes(dispersed, {
-    in: "red_green",
-    in2: "blue_channel",
-    mode: "screen",
-    "color-interpolation-filters": mixSpace,
-    // Named `refracted` when the bezel path owns the recombination below, so
-    // everything downstream keeps consuming a single `dispersed` result either
-    // way and the two architectures stay swappable.
-    result: GLASS_BEZEL_REFRACTION ? "refracted" : bodyResult,
-  });
-  filter.append(redGreen, dispersed);
+  // Downstream consumes one name either way, so the two paths stay swappable.
+  const refractedResult = GLASS_BEZEL_REFRACTION ? "refracted" : bodyResult;
+
+  if (performance && GLASS_PERFORMANCE_CONFIG.dropDispersion) {
+    // One achromatic sample at the green (centre) scale. The chromatic split is
+    // three displacements of the same input plus four primitives to isolate and
+    // recombine them — the most expensive refinement in the graph per pixel of
+    // bezel it actually colours, and it only resolves at the extreme edge.
+    const displaced = svgElement("feDisplacementMap");
+    setAttributes(displaced, {
+      in: refractionSource,
+      in2: "displacement_map",
+      scale: baseScale,
+      xChannelSelector: "R",
+      yChannelSelector: "G",
+      result: refractedResult,
+    });
+    filter.append(displaced);
+  } else {
+    appendChannel(
+      "red",
+      baseScale + channelSplay,
+      "1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0",
+    );
+    appendChannel(
+      "green",
+      baseScale,
+      "0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0",
+    );
+    appendChannel(
+      "blue",
+      Math.max(0, baseScale - channelSplay),
+      "0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0",
+    );
+    const redGreen = svgElement("feBlend");
+    setAttributes(redGreen, {
+      in: "red_channel",
+      in2: "green_channel",
+      mode: "screen",
+      "color-interpolation-filters": mixSpace,
+      result: "red_green",
+    });
+    const dispersed = svgElement("feBlend");
+    setAttributes(dispersed, {
+      in: "red_green",
+      in2: "blue_channel",
+      mode: "screen",
+      "color-interpolation-filters": mixSpace,
+      result: refractedResult,
+    });
+    filter.append(redGreen, dispersed);
+  }
 
   if (GLASS_BEZEL_REFRACTION) {
     // The bezel weight is already encoded in the displacement map: it sits at
@@ -1140,14 +1257,15 @@ function appendFilter(
     });
     filter.append(lumaBlur, lumaMono, lumaAlpha, lumaBlend);
   }
-  const specularImage = svgElement("feImage");
+  // The rim comes out of the optics map's blue channel rather than a second
+  // image: white everywhere, with the packed specular alpha promoted back to
+  // the alpha channel. Identical output to the old dedicated raster, one fewer
+  // `feImage` to decode and hold.
+  const specularImage = svgElement("feColorMatrix");
   setAttributes(specularImage, {
-    href: maps.specular,
-    x: -1,
-    y: -1,
-    width: width + 2,
-    height: height + 2,
-    preserveAspectRatio: "none",
+    in: "displacement_map",
+    type: "matrix",
+    values: "0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 1 0 0",
     result: "specular_layer",
   });
   const specularSaturated = svgElement("feComposite");
@@ -1326,7 +1444,17 @@ function appendFilter(
     paintedResult = "with_material_paints";
   }
 
-  if (grain > 0) {
+  // In performance mode the grain is painted by a static CSS overlay instead
+  // (see `--glass-grain` in index.css). `feTurbulence` is three octaves of
+  // Perlin noise evaluated per pixel per frame, and its output is identical
+  // every frame — by far the worst work-to-change ratio in the graph. The
+  // overlay costs one cached raster for the life of the process.
+  //
+  // The one thing that construction cannot preserve is the ordering below: a
+  // CSS layer sits above the specular rim rather than beneath it. At the 6-8%
+  // strengths the materials use, on a rim two pixels wide, that is not a
+  // difference anyone can see.
+  if (grain > 0 && !(performance && GLASS_PERFORMANCE_CONFIG.cssGrain)) {
     // The surface texture, composited over the finished material but under the
     // specular rim — the highlight is a reflection off the pane, so it sits on
     // top of the grain rather than being roughened by it.
@@ -1475,11 +1603,13 @@ export function LiquidGlassDefs() {
   // frost, saturation, and whether this surface is a refractive Liquid Glass
   // stop or a cheaper Classic blur stop.
   const glassMaterial = useSettingsStore((s) => s.glassMaterial);
+  const performance = useSettingsStore((s) => s.glassPerformanceMode);
   const tokens = webGlassMaterialTokens(glassMaterial);
   const { frost, saturation, lens } = tokens;
   const material = {
     ...tokens,
     applyRegularPaints: glassMaterial === "glass-regular",
+    performance,
   };
   const materialRef = useRef(material);
   materialRef.current = material;
@@ -1487,7 +1617,7 @@ export function LiquidGlassDefs() {
 
   useEffect(() => {
     remeasureAllRef.current?.();
-  }, [frost, saturation, lens, glassMaterial]);
+  }, [frost, saturation, lens, glassMaterial, performance]);
 
   useEffect(() => {
     if (!isWindowsWebview() || !defsRef.current) return;
@@ -1540,11 +1670,21 @@ export function LiquidGlassDefs() {
       const lensKey = material.lens
         ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
         : "none";
-      const geometry = `${isSmall ? "small" : "regular"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}w${GLASS_COLOR_WASH_STRENGTH}-${GLASS_COLOR_WASH_BLUR}m${GLASS_LUMA_WASH_STRENGTH}-${GLASS_LUMA_WASH_BLUR}-${GLASS_LUMA_WASH_MODE}q${GLASS_LOW_RES_BLOCK}e${GLASS_EDGE_CAUSTIC_STRENGTH}-${GLASS_EDGE_CAUSTIC_WIDTH}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
+      const geometry = `${isSmall ? "small" : "regular"}-${material.performance ? "perf" : "full"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}w${GLASS_COLOR_WASH_STRENGTH}-${GLASS_COLOR_WASH_BLUR}m${GLASS_LUMA_WASH_STRENGTH}-${GLASS_LUMA_WASH_BLUR}-${GLASS_LUMA_WASH_MODE}q${GLASS_LOW_RES_BLOCK}e${GLASS_EDGE_CAUSTIC_STRENGTH}-${GLASS_EDGE_CAUSTIC_WIDTH}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 
-      if (!material.lens) {
+      // Small controls are the reason the graph count explodes: every framed
+      // Button is one of these (see `button.tsx`), so a single screen can carry
+      // dozens of independent 45-primitive backdrop filters. Their bezel is a
+      // few pixels of a 36px control — the refraction is not legible at that
+      // size, and the plain blur is indistinguishable in place while costing
+      // nothing to composite.
+      const cheapSmall =
+        isSmall &&
+        material.performance &&
+        GLASS_PERFORMANCE_CONFIG.cheapSmallControls;
+      if (!material.lens || cheapSmall) {
         const plain = `blur(${blurLevel}px) saturate(${material.saturation})`;
         element.style.setProperty("--liquid-glass-filter", plain);
         element.style.setProperty("backdrop-filter", plain);
@@ -1596,6 +1736,7 @@ export function LiquidGlassDefs() {
         material.grain,
         material.frameTint,
         material.sheen,
+        material.performance,
       );
       const filterValue = `url("#${id}")`;
       element.style.setProperty("--liquid-glass-filter", filterValue);

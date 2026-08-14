@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { HistoryIcon, SearchIcon, XIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { MENU_GLASS_SURFACE_CLASS } from "@/components/ui/glass-surface";
 import { Thumbnail } from "@/components/shared/thumbnail";
 import { useSearchHistory } from "@/lib/store/search-history";
 import {
@@ -34,7 +35,9 @@ type Entry =
   | { type: "entity"; item: ShelfItem };
 
 const entryKey = (e: Entry, i: number) =>
-  e.type === "entity" ? `e-${e.item.kind}-${e.item.id}-${i}` : `${e.type}-${e.query}`;
+  e.type === "entity"
+    ? `e-${e.item.kind}-${e.item.id}-${i}`
+    : `${e.type}-${e.query}`;
 
 /**
  * The Search page's input, with its suggestion dropdown.
@@ -236,7 +239,7 @@ export function SearchField({
           className="h-10 rounded-full pl-10 pr-10"
           value={value}
           onChange={(e) => {
-                    setValue(e.target.value);
+            setValue(e.target.value);
           }}
           onFocus={() => setFocused(true)}
           onBlur={(e) => {
@@ -261,15 +264,18 @@ export function SearchField({
       {showDropdown && (
         <div
           onMouseDown={(e) => e.preventDefault()}
-          className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-md"
+          className={cn(
+            "menu-shell-clip absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-[34px] border py-2 text-popover-foreground",
+            MENU_GLASS_SURFACE_CLASS,
+          )}
         >
-          <ul className="py-1">
+          <ul>
             {entries.map((entry, i) => (
               <li key={entryKey(entry, i)}>
                 <button
                   type="button"
                   className={cn(
-                    "flex w-full cursor-pointer items-center gap-3 px-3 text-left",
+                    "mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-3 rounded-md px-3 text-left transition-colors",
                     entry.type === "entity" ? "py-1.5" : "py-2",
                     i === activeIdx ? "bg-accent" : "hover:bg-accent",
                   )}
@@ -315,10 +321,10 @@ export function SearchField({
             ))}
           </ul>
           {history.length > 0 ? (
-            <div className="border-t">
+            <div className="mt-1 pt-1">
               <button
                 type="button"
-                className="w-full cursor-pointer px-3 py-2 text-left text-xs text-muted-foreground hover:bg-accent"
+                className="mx-2 w-[calc(100%-1rem)] cursor-pointer rounded-md px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent"
                 onClick={() => {
                   clearHistory();
                   setFocused(false);

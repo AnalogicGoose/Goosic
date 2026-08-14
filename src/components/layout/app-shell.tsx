@@ -101,9 +101,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const mode = useLayoutStore((s) => s.mode);
   const setMode = useLayoutStore((s) => s.setMode);
   const background = useSettingsStore((s) => s.background);
-  // Minimized / hidden-to-tray: unmount the ambient background so its
-  // continuously-animating blur stack stops burning GPU while the app
-  // plays in the background. Remounts (with its own fade-in) on restore.
+  // Minimized / hidden-to-tray: unmount the artwork backdrop so its blur does
+  // not consume compositor work while the app continues playing in the tray.
   const windowHidden = useWindowHidden();
   // Gates the side card and the floating window, which are hidden with no
   // active track — at first launch and after the queue is cleared. The mode
@@ -323,13 +322,16 @@ export function AppShell({ children }: { children: ReactNode }) {
             )}
           </div>
           {fullPlayerOpen && hasTrack ? (
+            // Cover the title-bar area too. TopBar is a fixed z-60 layer, so
+            // its drag region and native caption buttons remain interactive
+            // above this surface while the old page cannot leak through.
             <div
               role="dialog"
               aria-label="Full-screen player"
               aria-modal="true"
-              className="absolute inset-x-0 bottom-0 top-(--titlebar-h) z-40 overflow-hidden bg-background"
+              className="absolute inset-0 z-40 overflow-hidden bg-background"
             >
-              <NowPlayingBackground />
+              <NowPlayingBackground variant="mesh" />
               <PlayerBar
                 variant="fullscreen"
                 onRequestClose={() => setFullPlayerOpen(false)}

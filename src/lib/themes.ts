@@ -337,7 +337,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     lens: { refraction: 30, depth: 20, dispersion: 20, splay: 20 },
   },
   "glass-regular": {
-    frost: 2,
+    frost: 6,
     // Measured 42,42,42 on Windows against 39,39,39 on macOS. Shade is a plain
     // black composite, so 42 * (1 - 0.07) ~= 39. The player bar reads lighter
     // than the sidebar for the same reason it always did — a brighter backdrop
@@ -362,7 +362,7 @@ export const WEB_GLASS_MATERIAL_TOKENS: Record<
     sheen: 0,
     frameTint: 100,
     grain: 6,
-    lens: { refraction: 70, depth: 30, dispersion: 20, splay: 20 },
+    lens: { refraction: 70, depth: 10, dispersion: 20, splay: 20 },
   },
   // The Classic stops are frosted panes: heavy blur, an opacity tint, no lens.
   // Their frost runs far above the glass family's because the blur is the whole
@@ -471,7 +471,7 @@ export function useGlassMaterial(material: GlassMaterialId): void {
     root.dataset.glassMaterial = material;
     // The synthesized side of the same choice. Harmless on macOS: the
     // `@supports` block clears the fill the system material already provides.
-    const { frost, luminosity, shade } = webGlassMaterialTokens(material);
+    const { frost, luminosity, shade, grain } = webGlassMaterialTokens(material);
     root.style.setProperty("--glass-blur", `${frost}px`);
     root.style.setProperty(
       "--glass-blur-small",
@@ -479,7 +479,23 @@ export function useGlassMaterial(material: GlassMaterialId): void {
     );
     root.style.setProperty("--glass-luminosity", `${luminosity}%`);
     root.style.setProperty("--glass-shade", `${shade}%`);
+    // Consumed only by the performance-mode grain overlay, which paints the
+    // texture `feTurbulence` would otherwise regenerate every frame.
+    root.style.setProperty("--glass-grain", `${grain / 100}`);
   }, [material]);
+}
+
+/**
+ * Whether the CSS grain overlay is live, published as an attribute so the
+ * stylesheet can gate on it. The overlay stands in for the filter's
+ * `feTurbulence` pass and the two must never both paint, or the grain doubles.
+ */
+export function useGlassPerformanceMode(enabled: boolean): void {
+  useEffect(() => {
+    const root = document.documentElement;
+    if (enabled) root.dataset.glassPerformance = "on";
+    else delete root.dataset.glassPerformance;
+  }, [enabled]);
 }
 
 /** True when WebKit will honour Apple's Liquid Glass material in this page. */

@@ -326,20 +326,20 @@ function TrackRow({
               )}
             </>
           ) : (
-            <div className="relative size-10">
+            <div className="squircle-cover-frame relative size-10 overflow-hidden">
               <Thumbnail
                 thumbnails={t.thumbnails}
                 alt={t.title}
-                className="size-full rounded-sm"
+                className="size-full"
                 targetSize={80}
               />
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-0 rounded-sm border border-white opacity-10 mix-blend-difference"
+                className="squircle-cover-overlay pointer-events-none absolute inset-0 border border-white opacity-10 mix-blend-difference"
               />
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-sm bg-black/55 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                className="squircle-cover-overlay pointer-events-none absolute inset-0 flex items-center justify-center bg-black/55 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
               >
                 {isActive && playing ? (
                   <PauseIcon className="size-5 fill-current text-white" />

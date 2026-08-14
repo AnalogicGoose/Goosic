@@ -707,9 +707,40 @@ fn observer_script(bridge_url: &str) -> String {
     // native code resolves by reloading; only once our track has actually
     // played does a different id mean the page's own queue moved past it.
     if (!detectAd() && observedRequestedContent) {{
+      // Identity first, but never *only* identity: the official player
+      // updates `playerApi`/`location` a moment AFTER its autoplay pick
+      // starts, so at this event `readActualVideoId()` frequently still
+      // returns the requested id and the id test alone lets the wrong song
+      // through until the next 250ms sample pauses it — the audible burst.
+      // Two synchronous facts close that window, both known right now:
+      //   - a `play` on an element that is not the requested track's own
+      //     element, once that element is known, is by definition not our
+      //     track (YTM builds a fresh element for its pick), and
+      //   - a `play` on the requested element after it already reached its
+      //     end is the page rewinding the finished song to restart it.
       const actual = readActualVideoId();
-      if (actual && actual !== requestedVideoId) {{
+      const isRequestedElement =
+        !requestedContentMedia || media === requestedContentMedia;
+      if (
+        (actual && actual !== requestedVideoId) ||
+        !isRequestedElement ||
+        mediaReachedEnd(media)
+      ) {{
         silence();
+        // The page starting something else IS our track completing. Record it
+        // here rather than waiting for the sample loop to notice the id
+        // change: `pendingContentEnded` is what arms the volume ceiling and
+        // the play()/prototype guards, and YTM's pick often arrives on a
+        // freshly created element whose own `ended` listener never fired for
+        // our track. `PageMoved` marks it terminal immediately (no extra
+        // non-ad sample), matching the sample loop's own auto-advance path.
+        if (!pendingContentEnded && !reportedTrackEnded) {{
+          pendingContentEnded = true;
+          pendingContentEndedPageMoved = true;
+          pendingContentEndedSawAd = false;
+          pendingContentEndedNonAdSamples = 0;
+          schedulePost();
+        }}
         return;
       }}
     }}
@@ -2413,6 +2444,37 @@ mod tests {
             "if (pendingContentEnded || reportedTrackEnded || mediaReachedEnd(media)) return;"
         ));
         assert!(script.contains("finished,"));
+    }
+
+    /// The `play` event is the earliest synchronous notice that the official
+    /// page started its OWN autoplay pick. Identity alone is not enough there:
+    /// `playerApi`/`location` update a moment after playback begins, so the
+    /// requested id is often still reported and the wrong song stayed audible
+    /// until the next 250ms sample paused it. Element identity and the
+    /// finished-element check are both known synchronously and close it.
+    #[test]
+    fn observer_silences_the_pages_own_pick_at_the_play_event() {
+        let script = observer_script("http://127.0.0.1:1234/secret/web-player/state");
+        // Same CRLF caveat as above: match tokens, never a multi-line slice.
+        let guard = script
+            .split("const isRequestedElement")
+            .nth(1)
+            .and_then(|rest| rest.split("applyDesiredVolume(media);").next())
+            .expect("play listener must decide ownership before amplifying");
+        // A play on an element that is not the requested track's own element
+        // is the page's pick; YTM builds a fresh element for it.
+        assert!(guard.contains("media === requestedContentMedia"));
+        assert!(guard.contains("!isRequestedElement"));
+        // A play on the requested element past its end is a rewind-restart.
+        assert!(guard.contains("mediaReachedEnd(media)"));
+        // Identity remains the first test, so ads and wrong-track loads keep
+        // their existing handling.
+        assert!(guard.contains("actual !== requestedVideoId"));
+        // Silencing must also record the completion, otherwise the volume
+        // ceiling and play() guards stay disarmed and the terminal event waits
+        // for the sample loop to notice the id change.
+        assert!(guard.contains("pendingContentEndedPageMoved = true;"));
+        assert!(guard.contains("schedulePost();"));
     }
 
     #[test]

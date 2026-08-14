@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { AlertCircleIcon, Loader2Icon, LogInIcon } from "lucide-react";
+import {
+  AlertCircleIcon,
+  Loader2Icon,
+  LogInIcon,
+  PlusIcon,
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { AnimatedTabs } from "@/components/ui/animated-tabs";
 import { Button } from "@/components/ui/button";
@@ -21,6 +26,7 @@ import {
   type PlaylistNextPage,
 } from "@/lib/innertube/playlist";
 import { openSettings } from "@/lib/store/settings-dialog";
+import { CreatePlaylistDialog } from "@/components/shared/playlist-dialogs";
 
 export const Route = createFileRoute("/library")({
   component: LibraryPage,
@@ -34,6 +40,8 @@ function LibraryPage() {
   });
 
   const [tab, setTab] = useState("playlists");
+  const [createOpen, setCreateOpen] = useState(false);
+  const navigate = useNavigate();
 
   if (loggedIn.data === false) {
     return <LoggedOutState />;
@@ -41,7 +49,21 @@ function LibraryPage() {
 
   return (
     <div className="flex flex-col gap-6 px-6 pb-6 pt-3">
-      <h1 className="text-3xl font-bold tracking-tight">Library</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-3xl font-bold tracking-tight">Library</h1>
+        {/* Creating a playlist is a library-level action, so it lives on
+            the page header rather than only inside a track's menu — the
+            latter made an empty playlist impossible to create at all. */}
+        <Button variant="outline" onClick={() => setCreateOpen(true)}>
+          <PlusIcon />
+          New playlist
+        </Button>
+      </div>
+      <CreatePlaylistDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={(id) => navigate({ to: "/playlist/$id", params: { id } })}
+      />
       <AnimatedTabs
         activeTab={tab}
         onChange={setTab}

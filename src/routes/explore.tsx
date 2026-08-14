@@ -67,37 +67,36 @@ function ExplorePage() {
       header={
         <div className="@container">
           <div className="grid gap-3 grid-cols-1 @[50rem]:grid-cols-3">
-          {SUBPAGES.map(({ to, label, blurb, icon: Icon, gradient }) => (
-            <Link
-              key={to}
-              to={to}
-              className={`group relative overflow-hidden rounded-xl ${gradient} px-5 py-4 transition-transform hover:scale-[1.01] active:scale-[0.99]`}
-            >
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-xl leading-none font-semibold text-white">
-                    {label}
-                  </span>
-                  <span className="text-sm leading-none text-white/70">
-                    {blurb}
-                  </span>
-                </div>
-                <div className="relative size-12 shrink-0">
-                  <div className="flex size-full items-center justify-center rounded-full bg-white/10 transition-colors group-hover:bg-white/15">
-                    <Icon className="size-6 text-white" />
+            {SUBPAGES.map(({ to, label, blurb, icon: Icon, gradient }) => (
+              <Link
+                key={to}
+                to={to}
+                // The grid is layout-only. Each visual tile uses the exact
+                // same squircle + masked Ultra-thin rim as cover artwork, so
+                // the shape also remains correct during its hover scale.
+                className={`group squircle-cover relative overflow-hidden ${gradient} px-5 py-4 transition-transform hover:scale-[1.01] active:scale-[0.99]`}
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xl leading-none font-semibold text-white">
+                      {label}
+                    </span>
+                    <span className="text-sm leading-none text-white/70">
+                      {blurb}
+                    </span>
                   </div>
-                  <div
-                    aria-hidden="true"
-                    className="pointer-events-none absolute inset-0 rounded-full border border-white opacity-10 mix-blend-difference"
-                  />
+                  <div className="relative size-12 shrink-0">
+                    <div className="flex size-full items-center justify-center rounded-full bg-white/10 transition-colors group-hover:bg-white/15">
+                      <Icon className="size-6 text-white" />
+                    </div>
+                    <div
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-0 rounded-full border border-white opacity-10 mix-blend-difference"
+                    />
+                  </div>
                 </div>
-              </div>
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 rounded-xl border border-white opacity-10 mix-blend-difference"
-              />
-            </Link>
-          ))}
+              </Link>
+            ))}
           </div>
         </div>
       }

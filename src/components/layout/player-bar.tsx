@@ -599,7 +599,10 @@ export function PlayerBar({
         <AnimatePresence initial={false} mode="wait">
           {queueOpen ? (
             <div key="queue" className="flex min-h-0 flex-1 flex-col">
-              <QueueBody onClose={() => setQueueOpen(false)} />
+              <QueueBody
+                onClose={() => setQueueOpen(false)}
+                topInset={fullscreen}
+              />
             </div>
           ) : (
             <motion.div
@@ -671,13 +674,13 @@ export function PlayerBar({
                     <Thumbnail
                       thumbnails={track.thumbnails}
                       alt={track.title}
-                      className="aspect-square w-full rounded-md border border-hairline pointer-events-none"
+                      className="fullscreen-cover-rim aspect-square w-full pointer-events-none"
                       targetSize={1024}
                       highRes
                       overrideHighRes={iTunesCover}
                     />
                   ) : (
-                    <div className="aspect-square w-full rounded-md border border-hairline bg-muted" />
+                    <div className="fullscreen-cover-rim squircle-cover aspect-square w-full bg-muted" />
                   )}
                 </div>
 

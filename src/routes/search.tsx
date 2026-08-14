@@ -615,7 +615,13 @@ function TopResultHero({
       {overlay}
 
       <div className="pointer-events-none relative flex min-w-0 flex-1 items-center gap-5">
-        <div className={cn("relative size-24 shrink-0 md:size-28", radius)}>
+        <div
+          className={cn(
+            "relative size-24 shrink-0 md:size-28",
+            radius,
+            !item.round && "squircle-cover-frame",
+          )}
+        >
           <Thumbnail
             thumbnails={item.thumbnails}
             alt={item.title}
@@ -629,6 +635,7 @@ function TopResultHero({
             className={cn(
               "pointer-events-none absolute inset-0 border border-hairline",
               radius,
+              !item.round && "squircle-cover-overlay",
             )}
           />
         </div>

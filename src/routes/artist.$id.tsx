@@ -1,12 +1,16 @@
+import { useMemo } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircleIcon } from "lucide-react";
 import { fetchArtist } from "@/lib/innertube/artist";
 import { EntityHeader } from "@/components/shared/entity-header";
+import { ArtistActions } from "@/components/shared/artist-actions";
 import { ShelfCarousel } from "@/components/shared/shelf-carousel";
 import { TrackList } from "@/components/shared/track-list";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Shelf } from "@/lib/innertube/types";
+import { fetchWatchQueue } from "@/lib/innertube/radio";
+import { usePlaybackStore } from "@/lib/store/playback";
+import type { Shelf, ShelfItem } from "@/lib/innertube/types";
 
 export const Route = createFileRoute("/artist/$id")({
   component: ArtistPageView,
@@ -23,6 +27,47 @@ function ArtistPageView() {
     queryKey: ["artist", id],
     queryFn: () => fetchArtist(id),
   });
+
+  // The top-songs shelf is already on the page, so Play can start
+  // instantly from it instead of round-tripping through /next.
+  const topSongs: ShelfItem[] = useMemo(() => {
+    const listShelf = data?.shelves.find((s) => s.display === "list");
+    return (listShelf?.items ?? []).filter((i) => i.kind === "song");
+  }, [data?.shelves]);
+
+  const shuffleEndpoint = data?.shuffleEndpoint;
+  const canShuffle = Boolean(
+    shuffleEndpoint?.playlistId ?? shuffleEndpoint?.videoId ?? topSongs.length,
+  );
+
+  const playTopSongs = () => {
+    if (topSongs.length === 0) return;
+    usePlaybackStore.getState().playShelfItems(topSongs, 0);
+    usePlaybackStore.getState().setShuffle(false);
+  };
+
+  /** Fallback Play for artists whose page ships no top-songs list. */
+  const shuffleEndpointPlay = shuffleEndpoint
+    ? async () => {
+        const tracks = await resolveEndpointQueue(shuffleEndpoint);
+        if (tracks.length === 0) return;
+        usePlaybackStore.getState().playShelfItems(tracks, 0);
+        usePlaybackStore.getState().setShuffle(false);
+      }
+    : undefined;
+
+  const shuffleArtist = async () => {
+    // Prefer YouTube's own artist shuffle station; fall back to shuffling
+    // the top songs we already have so the button is never a dead end.
+    const tracks = shuffleEndpoint
+      ? await resolveEndpointQueue(shuffleEndpoint)
+      : [];
+    const pool = tracks.length > 0 ? tracks : topSongs;
+    if (pool.length === 0) return;
+    const start = Math.floor(Math.random() * pool.length);
+    usePlaybackStore.getState().playShelfItems(pool, start);
+    usePlaybackStore.getState().setShuffle(true);
+  };
 
   if (error) {
     return (
@@ -48,6 +93,9 @@ function ArtistPageView() {
         description={data.description}
         thumbnails={data.thumbnails}
         round
+        onPlay={topSongs.length > 0 ? playTopSongs : shuffleEndpointPlay}
+        onShuffle={canShuffle ? shuffleArtist : undefined}
+        actions={<ArtistActions artist={data} />}
       />
 
       {data.shelves.map((shelf) =>
@@ -59,6 +107,28 @@ function ArtistPageView() {
       )}
     </div>
   );
+}
+
+/**
+ * Turn an artist header endpoint into a playable queue. A playlist id
+ * has to be expanded through /next; a bare video id is already the whole
+ * answer for a one-track start.
+ */
+async function resolveEndpointQueue(endpoint: {
+  playlistId?: string;
+  videoId?: string;
+}): Promise<ShelfItem[]> {
+  try {
+    if (endpoint.playlistId) {
+      return await fetchWatchQueue(endpoint.playlistId, endpoint.videoId);
+    }
+    if (endpoint.videoId) {
+      return await fetchWatchQueue(`RDAMVM${endpoint.videoId}`, endpoint.videoId);
+    }
+  } catch {
+    // Caller falls back to the top-songs shelf.
+  }
+  return [];
 }
 
 function ListShelf({ shelf }: { shelf: Shelf }) {

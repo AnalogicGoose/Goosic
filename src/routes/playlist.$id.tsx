@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   AlertCircleIcon,
@@ -25,6 +25,7 @@ import type { ShelfItem } from "@/lib/innertube/types";
 import { EntityHeader } from "@/components/shared/entity-header";
 import { TrackList } from "@/components/shared/track-list";
 import { JumpToCurrentButton } from "@/components/shared/jump-to-current-button";
+import { PlaylistActionsMenu } from "@/components/shared/playlist-actions-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import {
@@ -72,6 +73,7 @@ type AnyPage = PlaylistFirstPage | PlaylistNextPage;
 
 function PlaylistPageView() {
   const { id } = Route.useParams();
+  const navigate = useNavigate();
 
   const query = useInfiniteQuery<AnyPage, Error>({
     queryKey: ["playlist-pages", id],
@@ -448,6 +450,20 @@ function PlaylistPageView() {
                     : "Check downloaded"}
               </Button>
             ) : null}
+            {isLikedSongs ? null : (
+              <PlaylistActionsMenu
+                playlistId={id}
+                title={header.title}
+                description={header.description}
+                privacy={header.privacy}
+                editable={header.editable}
+                onDeleted={() => {
+                  // The page it was showing no longer exists.
+                  unpin(id);
+                  void navigate({ to: "/library" });
+                }}
+              />
+            )}
             {isLikedSongs ? null : pinned ? (
               <Button variant="outline" onClick={() => unpin(id)}>
                 <PinOffIcon />

@@ -58,7 +58,7 @@ describe("Windows glass material calibration", () => {
       sheen: 0,
       frameTint: 100,
       grain: 6,
-      lens: { refraction: 70, depth: 30, dispersion: 20, splay: 20 },
+      lens: { refraction: 70, depth: 10, dispersion: 20, splay: 20 },
     });
   });
 });

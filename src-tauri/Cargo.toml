@@ -1,6 +1,6 @@
 [package]
 name = "goosic"
-version = "0.7.0"
+version = "0.7.1"
 description = "Goosic — fast, responsive YouTube Music desktop client"
 authors = ["George Shyshov"]
 license = "GPL-3.0-only"
@@ -159,3 +159,26 @@ objc2-web-kit = { version = "0.3", features = [
 [dev-dependencies]
 # ServiceExt::oneshot for the stream-server routing test.
 tower = { version = "0.5", features = ["util"] }
+
+# WebView2 multi-profile support, which upstream Tauri does not yet plumb.
+#
+# WebView2 keys an entire browser process tree — browser, GPU, network,
+# storage, audio and crashpad processes — to a *user data folder*. Every
+# webview needing its own cookie jar therefore cost a second full tree
+# (~69 MB measured on Windows 11). WebView2 profiles solve exactly this:
+# isolated storage partitions inside one folder, sharing one process tree.
+#
+# wry added `with_profile_name` in 0.56.1, but tauri-runtime-wry pins wry
+# ^0.55 and none of the three tauri crates carry the attribute, so the API is
+# unreachable from a stock build at any published version. These four patches
+# backport the upstream wry change onto the pinned 0.54.4 and add the missing
+# plumbing; they are additive, Windows-only, and change no default behaviour.
+#
+# Retire this block once the attribute lands upstream: the app-side call is
+# already `WebviewWindowBuilder::profile_name`, which is the name the upstream
+# API is expected to use.
+[patch.crates-io]
+wry = { path = "vendor/wry-0.54.4" }
+tauri = { path = "vendor/tauri-2.10.3" }
+tauri-runtime = { path = "vendor/tauri-runtime-2.10.1" }
+tauri-runtime-wry = { path = "vendor/tauri-runtime-wry-2.10.1" }

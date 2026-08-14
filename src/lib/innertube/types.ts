@@ -81,9 +81,14 @@ export type ArtistPage = {
   description?: string;
   subscribers?: string;
   thumbnails: Thumbnail[];
-  /** Radio / shuffle endpoint video id, if present */
-  radioId?: string;
-  shuffleId?: string;
+  /**
+   * The header's Start-radio and Play/Shuffle endpoints. Either field of
+   * either endpoint may be absent — YouTube sends a playlist for some
+   * artists and a single seed video for others — so consumers must
+   * handle both and hide the action when neither is present.
+   */
+  radioEndpoint?: { playlistId?: string; videoId?: string };
+  shuffleEndpoint?: { playlistId?: string; videoId?: string };
   shelves: Shelf[];
 };
 
@@ -96,6 +101,13 @@ export type AlbumPage = {
   duration?: string;
   thumbnails: Thumbnail[];
   tracks: ShelfItem[];
+  /**
+   * The album's `OLAK5uy_…` audio playlist. YouTube Music addresses an
+   * album by this id — not by its `MPREb_…` browse id — for library saves
+   * and for seeding album radio, so both actions stay hidden when the
+   * response doesn't carry one.
+   */
+  audioPlaylistId?: string;
 };
 
 export type PlaylistPage = {
@@ -106,6 +118,15 @@ export type PlaylistPage = {
   trackCount?: number;
   thumbnails: Thumbnail[];
   tracks: ShelfItem[];
+  /**
+   * True when YouTube served the *editable* header variant, meaning this
+   * account owns the playlist and may rename or delete it. Read from the
+   * response rather than inferred from the owner string, which is a
+   * display name and can collide.
+   */
+  editable?: boolean;
+  /** Current visibility, only known for editable playlists. */
+  privacy?: "PUBLIC" | "PRIVATE" | "UNLISTED";
 };
 
 /**

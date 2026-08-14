@@ -312,16 +312,48 @@ function AlbumMesh({ url }: { url: string }) {
 }
 
 /**
- * The ambient background: a procedural color mesh sampled from the current
- * cover. Shared by the main and floating windows so both use exactly the same
- * palette and transition.
- *
- * There is no blurred-artwork variant. The cover is a color source only, never
- * something the background displays, so nothing here scales or blurs the image
- * itself. Whether an ambient background renders at all is the Background
- * setting, checked by the caller.
+ * The regular window backdrop. Unlike the mesh, this only asks the compositor
+ * to blur a single artwork image: no canvas palette extraction, generated
+ * cells, or continuously animated filter layers. Keeping the image slightly
+ * oversized prevents the blur from revealing hard edges at the viewport.
  */
-export function NowPlayingBackground() {
+function BlurredCover({ url }: { url: string }) {
+  const reduceMotion = useReducedMotion();
+
+  return (
+    <div
+      className="pointer-events-none absolute inset-0 overflow-hidden"
+      aria-hidden
+    >
+      <AnimatePresence initial={false}>
+        <motion.img
+          key={url}
+          src={url}
+          alt=""
+          className="album-cover-background absolute -inset-12 size-[calc(100%+6rem)] max-w-none object-cover"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: reduceMotion ? 0 : 0.65, ease: "easeOut" }}
+          draggable={false}
+        />
+      </AnimatePresence>
+      <div className="absolute inset-0 bg-background/25 dark:bg-background/40" />
+      <div className="bg-cover-noise absolute inset-0 opacity-60" />
+    </div>
+  );
+}
+
+/**
+ * The song-art backdrop. Regular windows use a static blurred cover so they
+ * stay cheap while browsing; the procedural mesh is reserved for the immersive
+ * full-screen player, where its motion is part of the experience.
+ */
+export function NowPlayingBackground({
+  variant = "blurred",
+}: {
+  variant?: "blurred" | "mesh";
+}) {
   const track = usePlaybackStore(currentTrack);
   const url =
     track?.thumbnails && track.thumbnails.length > 0
@@ -329,5 +361,9 @@ export function NowPlayingBackground() {
       : null;
 
   if (!url) return null;
-  return <AlbumMesh url={url} />;
+  return variant === "mesh" ? (
+    <AlbumMesh url={url} />
+  ) : (
+    <BlurredCover url={url} />
+  );
 }
