@@ -5,8 +5,8 @@
 >
 > Last verified: **2026-08-13**
 > Current app version: **0.7.1**
-> Current release candidate: **v0.7.1 release preparation**
-> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.5.8>
+> Current release state: **v0.7.1 published**
+> Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.7.1>
 
 ## 1. New-session quick start
 
