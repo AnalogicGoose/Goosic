@@ -31,20 +31,30 @@ const accounts = vi.hoisted(() => {
 
   let current = [account("account-a")];
   let queued: FakeAccount[][] = [];
-  const invoke = vi.fn(async (command: string) => {
+  const deleted: string[][] = [];
+  const invoke = vi.fn(async (command: string, args?: unknown) => {
     if (command === "list_accounts") {
       return queued.length ? queued.shift() : current;
     }
     if (command === "list_offline_downloads") return [];
+    if (command === "delete_cache_entries") {
+      const videoIds = (args as { videoIds: string[] }).videoIds;
+      if (!videoIds.length)
+        throw new Error("no downloaded tracks were selected");
+      deleted.push(videoIds);
+      return videoIds.length * 1_000;
+    }
     throw new Error(`Unexpected Tauri command in test: ${command}`);
   });
 
   return {
     account,
     invoke,
+    deleted,
     reset: () => {
       current = [account("account-a")];
       queued = [];
+      deleted.length = 0;
       invoke.mockClear();
     },
     set: (...next: FakeAccount[]) => {
@@ -58,6 +68,7 @@ const accounts = vi.hoisted(() => {
 
 const native = vi.hoisted(() => {
   let jobs: Record<string, OfflineDownloadSnapshot> = {};
+  const removedIds: string[][] = [];
   const subscribers = new Set<(state: JobsState) => void>();
 
   const emit = (snapshot: OfflineDownloadSnapshot) => {
@@ -73,10 +84,19 @@ const native = vi.hoisted(() => {
     emit,
     reset: () => {
       jobs = {};
+      removedIds.length = 0;
       subscribers.clear();
     },
+    removedIds,
     store: {
-      getState: () => ({ jobs, upsert: emit }),
+      getState: () => ({
+        jobs,
+        upsert: emit,
+        remove: (videoIds?: string[]) => {
+          removedIds.push(videoIds ?? []);
+          for (const videoId of videoIds ?? []) delete jobs[videoId];
+        },
+      }),
       subscribe: (subscriber: (state: JobsState) => void) => {
         subscribers.add(subscriber);
         return () => subscribers.delete(subscriber);
@@ -195,6 +215,7 @@ const {
   offlineIdentityKey,
   playlistDownloadKey,
   preparePlaylistDownloads,
+  removePlaylistDownload,
   retryPlaylistDownload,
   startPlaylistDownload,
   useOfflinePlaylistStore,
@@ -580,5 +601,189 @@ describe("playlist cancellation and lifecycle", () => {
       startPlaylistDownload("second", "Second", [song("two")]),
     ).resolves.toBeUndefined();
     expect(native.ownership).toHaveBeenCalledWith(["one"], false);
+  });
+});
+
+describe("removing a downloaded playlist", () => {
+  it("deletes the files and the manifest so it cannot come back on restart", async () => {
+    await startPlaylistDownload("playlist", "Mix", [song("one"), song("two")]);
+    expect(
+      useOfflinePlaylistStore.getState().manifestsByIdentity[PERSONAL_IDENTITY]
+        ?.playlist,
+    ).toBeDefined();
+
+    await removePlaylistDownload(PERSONAL_IDENTITY, "playlist");
+
+    expect(accounts.deleted).toEqual([["one", "two"]]);
+    expect(native.removedIds).toEqual([["one", "two"]]);
+    // The persisted manifest is what survives a restart. If it stays, the
+    // playlist reappears as downloaded with no files behind it.
+    expect(
+      useOfflinePlaylistStore.getState().manifestsByIdentity[PERSONAL_IDENTITY],
+    ).toBeUndefined();
+    expect(batch()).toBeUndefined();
+  });
+
+  it("keeps files another downloaded playlist still needs", async () => {
+    await startPlaylistDownload("shared", "Shared", [song("one"), song("two")]);
+    await startPlaylistDownload("other", "Other", [song("two"), song("three")]);
+
+    await removePlaylistDownload(PERSONAL_IDENTITY, "shared");
+
+    // "two" belongs to a playlist that is still downloaded.
+    expect(accounts.deleted).toEqual([["one"]]);
+    expect(
+      useOfflinePlaylistStore.getState().manifestsByIdentity[PERSONAL_IDENTITY]
+        ?.other,
+    ).toBeDefined();
+  });
+
+  it("does not orphan a shared file when both playlists are removed at once", async () => {
+    await startPlaylistDownload("shared", "Shared", [song("one"), song("two")]);
+    await startPlaylistDownload("other", "Other", [song("two"), song("three")]);
+
+    // Started together, before either has finished deleting. Each removal used
+    // to see the other's manifest, defer "two" to it, and leave the file on
+    // disk with no manifest referencing it.
+    await Promise.all([
+      removePlaylistDownload(PERSONAL_IDENTITY, "shared"),
+      removePlaylistDownload(PERSONAL_IDENTITY, "other"),
+    ]);
+
+    expect(
+      useOfflinePlaylistStore.getState().manifestsByIdentity[PERSONAL_IDENTITY],
+    ).toBeUndefined();
+    const deleted = accounts.deleted.flat().sort();
+    // Every file must be accounted for, the shared one included.
+    expect(deleted).toEqual(["one", "three", "two"]);
+  });
+
+  it("does not erase a download started while the removal is in flight", async () => {
+    await startPlaylistDownload("playlist", "Mix", [song("one")]);
+
+    // Hold the native deletion open to reproduce the await gap.
+    let releaseDelete: (() => void) | undefined;
+    accounts.invoke.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        releaseDelete = resolve;
+      });
+      return 1_000;
+    });
+
+    const removing = removePlaylistDownload(PERSONAL_IDENTITY, "playlist");
+    await vi.waitFor(() => expect(releaseDelete).toBeDefined());
+
+    // The removal holds the runner slot, so a start in this window must not
+    // begin native work. Otherwise it would commit a fresh manifest that the
+    // resuming removal deletes, leaving downloaded files with no record of
+    // them — invisible after a restart.
+    const startsBefore = native.start.mock.calls.length;
+    await startPlaylistDownload("playlist", "Mix", [song("one")]);
+    expect(native.start.mock.calls.length).toBe(startsBefore);
+
+    releaseDelete?.();
+    await removing;
+
+    // The removal completed, and no half-started batch was left behind.
+    expect(
+      useOfflinePlaylistStore.getState().manifestsByIdentity[PERSONAL_IDENTITY],
+    ).toBeUndefined();
+    expect(batch()).toBeUndefined();
+
+    // The slot is released, so downloading again afterwards works normally.
+    await startPlaylistDownload("playlist", "Mix", [song("one")]);
+    expect(
+      useOfflinePlaylistStore.getState().manifestsByIdentity[PERSONAL_IDENTITY]
+        ?.playlist,
+    ).toBeDefined();
+  });
+
+  it("is a no-op for a playlist that was never downloaded", async () => {
+    await removePlaylistDownload(PERSONAL_IDENTITY, "missing");
+    expect(accounts.deleted).toEqual([]);
+  });
+
+  it("keeps the manifest when deleting the files fails", async () => {
+    await startPlaylistDownload("playlist", "Mix", [song("one")]);
+    accounts.invoke.mockImplementationOnce(async () => {
+      throw new Error("file is locked");
+    });
+
+    await expect(
+      removePlaylistDownload(PERSONAL_IDENTITY, "playlist"),
+    ).rejects.toThrow("file is locked");
+
+    // Orphaning the audio with no way to reach it would be worse than a
+    // download entry the user can retry removing.
+    expect(
+      useOfflinePlaylistStore.getState().manifestsByIdentity[PERSONAL_IDENTITY]
+        ?.playlist,
+    ).toBeDefined();
+  });
+});
+
+describe("pruning manifests whose files are gone", () => {
+  it("drops a manifest once none of its files remain on disk", async () => {
+    await startPlaylistDownload("playlist", "Mix", [song("one"), song("two")]);
+
+    useOfflinePlaylistStore.getState().pruneMissing([]);
+
+    expect(useOfflinePlaylistStore.getState().manifestsByIdentity).toEqual({});
+  });
+
+  it("keeps a partially downloaded manifest", async () => {
+    await startPlaylistDownload("playlist", "Mix", [song("one"), song("two")]);
+
+    useOfflinePlaylistStore.getState().pruneMissing(["one"]);
+
+    expect(
+      useOfflinePlaylistStore.getState().manifestsByIdentity[PERSONAL_IDENTITY]
+        ?.playlist,
+    ).toBeDefined();
+  });
+
+  it("prunes per playlist without touching the ones still on disk", async () => {
+    await startPlaylistDownload("kept", "Kept", [song("one")]);
+    await startPlaylistDownload("gone", "Gone", [song("two")]);
+
+    useOfflinePlaylistStore.getState().pruneMissing(["one"]);
+
+    const manifests =
+      useOfflinePlaylistStore.getState().manifestsByIdentity[PERSONAL_IDENTITY];
+    expect(Object.keys(manifests ?? {})).toEqual(["kept"]);
+  });
+
+  it("keeps the manifest of a batch that is still downloading", async () => {
+    // The runner commits the manifest before the first file exists and never
+    // saves it again, so pruning mid-batch would erase a download that goes on
+    // to succeed.
+    let release: (() => void) | undefined;
+    native.start.mockImplementationOnce(async (videoId: string) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const snapshot = completed(videoId);
+      native.emit(snapshot);
+      return snapshot;
+    });
+
+    const running = startPlaylistDownload("playlist", "Mix", [song("one")]);
+    await vi.waitFor(() => expect(batch()?.currentVideoId).toBe("one"));
+
+    // Nothing is on disk yet — exactly the window the effect fires in.
+    useOfflinePlaylistStore.getState().pruneMissing([]);
+    expect(
+      useOfflinePlaylistStore.getState().manifestsByIdentity[PERSONAL_IDENTITY]
+        ?.playlist,
+    ).toBeDefined();
+
+    release?.();
+    await running;
+
+    expect(batch()).toMatchObject({ phase: "completed", completed: 1 });
+    expect(
+      useOfflinePlaylistStore.getState().manifestsByIdentity[PERSONAL_IDENTITY]
+        ?.playlist,
+    ).toBeDefined();
   });
 });

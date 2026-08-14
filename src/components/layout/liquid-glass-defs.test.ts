@@ -6,6 +6,7 @@ import {
   FIGMA_GLASS_REGULAR_PAINTS,
   FIGMA_SPECULAR_ANGLE_DEGREES,
   FIGMA_SPECULAR_RIM_WIDTH,
+  parseSuperellipseK,
   superellipseRectSdf,
   WINDOWS_UI_SUPERELLIPSE_K,
 } from "./liquid-glass-defs";
@@ -115,5 +116,42 @@ describe("createConvexRefractionProfile", () => {
     expect(strong.maximumDisplacement).toBeGreaterThan(
       soft.maximumDisplacement,
     );
+  });
+});
+
+describe("parseSuperellipseK", () => {
+  // The glass map and the CSS shape must be built from one source. The
+  // exponent used to be hardcoded per class here, so a surface system that
+  // changed its `--surface-corner-shape` got a filter tracing the old curve
+  // while the panel painted the new one.
+  it("reads the exponent the surface is actually drawn with", () => {
+    expect(parseSuperellipseK("superellipse(1.1)")).toBe(1.1);
+    expect(parseSuperellipseK("superellipse(1)")).toBe(1);
+    // getPropertyValue returns the raw declaration, whitespace included.
+    expect(parseSuperellipseK(" superellipse( 2.5 ) ")).toBe(2.5);
+  });
+
+  it("maps the CSS keywords onto the same curve family", () => {
+    expect(parseSuperellipseK("squircle")).toBe(4);
+    expect(parseSuperellipseK("round")).toBe(1);
+    expect(parseSuperellipseK("SUPERELLIPSE(3)")).toBe(3);
+  });
+
+  it("falls back to the round endpoint rather than degrading the SDF", () => {
+    // An unset variable (any surface outside the three systems), a keyword the
+    // SDF has no exponent for, and values that would divide the profile to a
+    // sharp-cornered rect.
+    for (const value of [
+      "",
+      "   ",
+      "bevel",
+      "notch",
+      "superellipse()",
+      "superellipse(0)",
+      "superellipse(-2)",
+      "superellipse(abc)",
+    ]) {
+      expect(parseSuperellipseK(value)).toBe(WINDOWS_UI_SUPERELLIPSE_K);
+    }
   });
 });

@@ -265,7 +265,7 @@ export function SearchField({
         <div
           onMouseDown={(e) => e.preventDefault()}
           className={cn(
-            "menu-shell-clip absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-[34px] border py-2 text-popover-foreground",
+            "menu-shell-clip absolute left-0 right-0 top-full z-50 mt-2 surface-menu py-2 text-popover-foreground",
             MENU_GLASS_SURFACE_CLASS,
           )}
         >
@@ -275,7 +275,7 @@ export function SearchField({
                 <button
                   type="button"
                   className={cn(
-                    "mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-3 rounded-md px-3 text-left transition-colors",
+                    "mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-3 surface-item px-3 text-left transition-colors",
                     entry.type === "entity" ? "py-1.5" : "py-2",
                     i === activeIdx ? "bg-accent" : "hover:bg-accent",
                   )}
@@ -324,7 +324,7 @@ export function SearchField({
             <div className="mt-1 pt-1">
               <button
                 type="button"
-                className="mx-2 w-[calc(100%-1rem)] cursor-pointer rounded-md px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent"
+                className="mx-2 w-[calc(100%-1rem)] cursor-pointer surface-item px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent"
                 onClick={() => {
                   clearHistory();
                   setFocused(false);

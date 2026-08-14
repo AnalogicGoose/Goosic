@@ -27,10 +27,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Thumbnail } from "@/components/shared/thumbnail";
 import { LikeDislikeButtons } from "@/components/shared/like-buttons";
-import {
-  ArtistLinks,
-  TrackTitleLink,
-} from "@/components/shared/artist-links";
+import { ArtistLinks, TrackTitleLink } from "@/components/shared/artist-links";
 import { QueuePopover } from "@/components/layout/queue-panel";
 import {
   LyricsBody,
@@ -283,9 +280,18 @@ export function PlayerBarBottom({
     </div>
   );
 
+  // Rendered as a sibling of the glass panel rather than inside it: the panel
+  // clips to its own rounded shape, so a child sitting above the bar would be
+  // cut away and the error never seen.
+  //
+  // The banner is a child of the bar's own flow rather than a separate
+  // absolute box, so it is measured against the bar itself: `bottom-full`
+  // places it fully above the bar's top edge. A zero-height wrapper pinned to
+  // `bottom-0` would instead resolve `-top-9` against the window bottom and
+  // land inside the bar, where the panel paints over it.
   const errorBanner =
     status === "error" && error && !presentation ? (
-      <div className="absolute -top-9 left-3 right-3 truncate rounded-md bg-destructive/90 px-3 py-1 text-xs text-destructive-foreground shadow">
+      <div className="pointer-events-none absolute bottom-full left-3 right-3 z-40 mb-1 truncate rounded-md bg-destructive/90 px-3 py-1 text-xs text-destructive-foreground shadow">
         Playback error: {error}
       </div>
     ) : null;
@@ -293,58 +299,64 @@ export function PlayerBarBottom({
   if (modern) {
     return (
       <TooltipProvider delayDuration={800} skipDelayDuration={0}>
-        <aside
-          className={cn(
-            PLAYER_GLASS_SURFACE_CLASS,
-            // See the classic variant below: `left` must clear the sidebar,
-            // because absolute positioning resolves against the content
-            // column's padding box, which starts behind the glass.
-            "absolute right-0 left-(--shell-inset) bottom-0 z-30 mx-2 mb-2 flex items-center gap-4 rounded-[999px] border px-4 py-2.5",
-          )}
-        >
+        {/* Positioning shell. It carries the bar's placement so the glass panel
+            inside it can clip to its own shape without cutting away the error
+            banner, which sits above the bar's top edge. */}
+        <div className="absolute right-0 left-(--shell-inset) bottom-0 z-30 mx-2 mb-2">
           {errorBanner}
-          {/* Fade the swapped layout in when the theme changes. */}
-          <motion.div
-            key="modern"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.18 }}
-            className="flex w-full items-center gap-4"
+          <aside
+            className={cn(
+              PLAYER_GLASS_SURFACE_CLASS,
+              "flex items-center gap-4 px-4 py-2.5",
+            )}
           >
-            {/* LEFT: transport, pinned to the bar's start. */}
-            {transport}
+            {/* Fade the swapped layout in when the theme changes. */}
+            <motion.div
+              key="modern"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.18 }}
+              className="flex w-full items-center gap-4"
+            >
+              {/* LEFT: transport, pinned to the bar's start. */}
+              {transport}
 
-            {/* CENTER: now-playing stacked above the scrubber, centered in
+              {/* CENTER: now-playing stacked above the scrubber, centered in
               the remaining space. `min-w-0` lets the title truncate. */}
-            <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
-              <div className="flex min-w-0 max-w-full items-center gap-2">
-                {cover("size-9", true)}
-                <div className="flex min-w-0 flex-col">
-                  <TrackTitleLink
-                    title={advertisement ? "Advertisement" : (track?.title ?? "Nothing playing")}
-                    albumId={track?.albumId}
-                    className="text-sm font-semibold leading-tight"
-                  />
-                  {track ? (
-                    <ArtistLinks
-                      artists={track.artists}
-                      fallback={track.subtitle ?? ""}
-                      className="truncate text-xs text-muted-foreground leading-tight"
+              <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
+                <div className="flex min-w-0 max-w-full items-center gap-2">
+                  {cover("size-9", true)}
+                  <div className="flex min-w-0 flex-col">
+                    <TrackTitleLink
+                      title={
+                        advertisement
+                          ? "Advertisement"
+                          : (track?.title ?? "Nothing playing")
+                      }
+                      albumId={track?.albumId}
+                      className="text-sm font-semibold leading-tight"
                     />
-                  ) : (
-                    <span className="truncate text-xs text-muted-foreground leading-tight">
-                      Pick a track to start
-                    </span>
-                  )}
+                    {track ? (
+                      <ArtistLinks
+                        artists={track.artists}
+                        fallback={track.subtitle ?? ""}
+                        className="truncate text-xs text-muted-foreground leading-tight"
+                      />
+                    ) : (
+                      <span className="truncate text-xs text-muted-foreground leading-tight">
+                        Pick a track to start
+                      </span>
+                    )}
+                  </div>
                 </div>
+                {progress}
               </div>
-              {progress}
-            </div>
 
-            {/* RIGHT: secondary actions, justified to the bar's end. */}
-            {extras}
-          </motion.div>
-        </aside>
+              {/* RIGHT: secondary actions, justified to the bar's end. */}
+              {extras}
+            </motion.div>
+          </aside>
+        </div>
       </TooltipProvider>
     );
   }
@@ -368,70 +380,76 @@ export function PlayerBarBottom({
     // adjacent triggers (Radix's 300ms default makes the next one
     // pop up instantly otherwise).
     <TooltipProvider delayDuration={800} skipDelayDuration={0}>
-      <aside
-        className={cn(
-          PLAYER_GLASS_SURFACE_CLASS,
-          // `left` is the shell's sidebar inset rather than 0: this bar is
-          // absolutely positioned, so its containing block is the content
-          // column's padding box, which now starts at the window edge behind
-          // the sidebar. `inset-x-0` therefore ran the bar underneath the
-          // sidebar (and `z-30` drew its controls back over the glass).
-          "absolute right-0 left-(--shell-inset) bottom-0 z-30 mx-2 mb-2 flex flex-col gap-2 rounded-[34px] border px-4 py-3",
-        )}
-      >
+      {/* Positioning shell — see the modern variant above. `left` is the
+          shell's sidebar inset rather than 0: this bar is absolutely
+          positioned, so its containing block is the content column's padding
+          box, which starts at the window edge behind the sidebar. `inset-x-0`
+          therefore ran the bar underneath the sidebar (and `z-30` drew its
+          controls back over the glass). */}
+      <div className="absolute right-0 left-(--shell-inset) bottom-0 z-30 mx-2 mb-2">
         {errorBanner}
-
-        {/* Fade the swapped layout in when the theme changes. */}
-        <motion.div
-          key="classic"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.18 }}
-          className="flex flex-col gap-2"
+        <aside
+          className={cn(
+            PLAYER_GLASS_SURFACE_CLASS,
+            "flex flex-col gap-2 px-4 py-3",
+          )}
         >
-          {/* Top row — three sections separated by `flex-1` wings so the
+          {/* Fade the swapped layout in when the theme changes. */}
+          <motion.div
+            key="classic"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.18 }}
+            className="flex flex-col gap-2"
+          >
+            {/* Top row — three sections separated by `flex-1` wings so the
             transport cluster always lands centered in the bar. */}
-          <div className="flex items-center gap-4">
-            {/* LEFT wing: cover + meta. `min-w-0` lets the title truncate
+            <div className="flex items-center gap-4">
+              {/* LEFT wing: cover + meta. `min-w-0` lets the title truncate
               instead of pushing the transport cluster off-center. */}
-            <div className="flex min-w-0 flex-1 items-center gap-3">
-              {cover("size-14", false)}
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <TrackTitleLink
-                  title={advertisement ? "Advertisement" : (track?.title ?? "Nothing playing")}
-                  albumId={track?.albumId}
-                  className="text-base font-semibold leading-tight"
-                />
-                {track ? (
-                  <ArtistLinks
-                    artists={track.artists}
-                    fallback={track.subtitle ?? ""}
-                    className="truncate text-sm text-muted-foreground leading-tight"
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                {cover("size-14", false)}
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <TrackTitleLink
+                    title={
+                      advertisement
+                        ? "Advertisement"
+                        : (track?.title ?? "Nothing playing")
+                    }
+                    albumId={track?.albumId}
+                    className="text-base font-semibold leading-tight"
                   />
-                ) : (
-                  <span className="truncate text-sm text-muted-foreground leading-tight">
-                    Pick a track to start
-                  </span>
-                )}
+                  {track ? (
+                    <ArtistLinks
+                      artists={track.artists}
+                      fallback={track.subtitle ?? ""}
+                      className="truncate text-sm text-muted-foreground leading-tight"
+                    />
+                  ) : (
+                    <span className="truncate text-sm text-muted-foreground leading-tight">
+                      Pick a track to start
+                    </span>
+                  )}
+                </div>
               </div>
+
+              {/* CENTER: transport. Intrinsic width (no flex-1) so the
+              flex-1 wings push it to the middle. */}
+              {transport}
+
+              {/* RIGHT wing: secondary actions, justified to the right edge. */}
+              <div className="flex min-w-0 flex-1 justify-end">{extras}</div>
             </div>
 
-            {/* CENTER: transport. Intrinsic width (no flex-1) so the
-              flex-1 wings push it to the middle. */}
-            {transport}
-
-            {/* RIGHT wing: secondary actions, justified to the right edge. */}
-            <div className="flex min-w-0 flex-1 justify-end">{extras}</div>
-          </div>
-
-          {/* Progress row — times sit at the bar's edges (intrinsic
+            {/* Progress row — times sit at the bar's edges (intrinsic
             widths, no padding inside their boxes) so the LEFT time
             starts exactly under cover-left and the RIGHT time ends
             exactly under more-right. The slider fills whatever's left
             between them. */}
-          {progress}
-        </motion.div>
-      </aside>
+            {progress}
+          </motion.div>
+        </aside>
+      </div>
     </TooltipProvider>
   );
 }

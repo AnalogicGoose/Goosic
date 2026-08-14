@@ -52,6 +52,56 @@ function reconcileWebTransport(generation: number, action: "play" | "pause") {
   });
 }
 
+/** Smallest duration seen for one media element, and which element it was. */
+export type WebDurationFloor = {
+  generation: number;
+  mediaGeneration: number;
+  duration: number;
+};
+
+/**
+ * Decide what duration to display for a WebPlayer sample.
+ *
+ * YouTube serves this audio as a growing stream, so `media.duration` reports
+ * how much has been fetched rather than the track's length. Diagnostics from a
+ * real session show it climbing from 243 to 372 on a 4:03 song — including
+ * while paused and after the track finished, with `position` frozen at 243.4.
+ * Taking it verbatim is what stretched the timeline mid-song.
+ *
+ * The first stable reading is the true length in every observed case, so keep
+ * the smallest duration seen for this media element and ignore later growth.
+ * `position` is the one hard lower bound: a track that plays to 265.7 is at
+ * least that long even if the first sample said 265, so the floor rises to meet
+ * it rather than letting the bar finish early.
+ *
+ * Returns the new floor, or `null` when the sample carries nothing usable.
+ *
+ * Display only. Track completion and queue advance come from the observer's own
+ * `ended`, which the same diagnostics show firing correctly — that path must
+ * never be second-guessed from here.
+ */
+export function stableWebDuration(
+  current: WebDurationFloor | null,
+  sample: {
+    generation: number;
+    mediaGeneration?: number;
+    duration: number;
+    position: number;
+  },
+): WebDurationFloor | null {
+  if (!(sample.duration > 0)) return null;
+  // `mediaGeneration` is optional; treat a missing one as its own bucket rather
+  // than letting undefined compare equal across different media elements.
+  const mediaGeneration = sample.mediaGeneration ?? -1;
+  const sameMedia =
+    current?.generation === sample.generation &&
+    current?.mediaGeneration === mediaGeneration;
+  const duration = sameMedia
+    ? Math.max(Math.min(current.duration, sample.duration), sample.position)
+    : sample.duration;
+  return { generation: sample.generation, mediaGeneration, duration };
+}
+
 /**
  * AudioEngine coordinates the official native WebPlayer for online tracks and
  * a singleton HTMLAudioElement for explicit downloaded-file playback. It also
@@ -98,6 +148,14 @@ export function useAudioEngine() {
   // progress bar back to it. Hold the requested position until a sample
   // confirms it, the generation changes, or the attempt visibly fails.
   const webSeekTargetRef = useRef<WebSeekHold | null>(null);
+  // Smallest duration the official page has reported for the current media, so
+  // a growing stream's inflating `media.duration` cannot stretch the timeline.
+  // Keyed by generation + mediaGeneration: a real track change resets it.
+  const webDurationFloorRef = useRef<{
+    generation: number;
+    mediaGeneration: number;
+    duration: number;
+  } | null>(null);
   const webStartupTimerRef = useRef<number | null>(null);
   const webStartupPhaseRef = useRef<"content" | "advertisement" | null>(null);
   const failWebPlaybackRef = useRef<(message: string) => void>(() => {});
@@ -480,7 +538,27 @@ export function useAudioEngine() {
       }
       store.setWebviewState(payload.ready, payload.advertisement);
       if (!payload.advertisement) {
-        if (payload.duration > 0) store.setDuration(payload.duration);
+        // YouTube serves this audio as a growing stream, so `media.duration`
+        // reports how much has been fetched rather than the track's length and
+        // climbs while the song plays — it even climbs while paused, and after
+        // the track has finished. Diagnostics for a 4:03 song showed it running
+        // from 243 to 372 with `position` frozen at 243.4.
+        //
+        // The *first* stable reading is the true length in every observed case
+        // (243 for a track that ended at 243.4; 265 for one that ended at
+        // 265.7), so keep the smallest duration seen for this media generation
+        // and ignore later growth. A genuinely different track arrives as a new
+        // media generation, which resets the floor.
+        //
+        // This is display-only on purpose. Track completion and queue advance
+        // come from the observer's own `ended`, which the same diagnostics show
+        // firing correctly — that path must not be second-guessed from here.
+        const next = stableWebDuration(webDurationFloorRef.current, payload);
+        if (next) {
+          webDurationFloorRef.current = next;
+          if (store.duration !== next.duration)
+            store.setDuration(next.duration);
+        }
         if (recoverySeek === null && positionIsAuthoritative) {
           store.setPosition(payload.position);
         }

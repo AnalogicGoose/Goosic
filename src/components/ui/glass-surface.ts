@@ -9,10 +9,22 @@ export type GlassMaterialVariant = "interactive" | "static";
  */
 export type GlassMaterialScale = "small" | "medium" | "large";
 
+/**
+ * The three semantic shape systems. Every rounded surface belongs to exactly
+ * one; each owns its full geometry contract (radius, corner shape, overflow,
+ * outline) through CSS variables declared in index.css. Callers pick a system
+ * rather than a radius, which is what keeps geometry from drifting per
+ * component.
+ */
+export type SurfaceShape = "player" | "menu" | "sidebar";
+
 type GlassSurfaceOptions = {
   variant?: GlassMaterialVariant;
   scale?: GlassMaterialScale;
   player?: boolean;
+  /** Semantic shape system. Omit only for small controls, which keep their
+   *  own pill/circle geometry and are not panel surfaces. */
+  shape?: SurfaceShape;
 };
 
 const LINUX_SURFACE_FALLBACK =
@@ -26,14 +38,20 @@ export function glassSurfaceClass({
   variant = "interactive",
   scale = "medium",
   player = false,
+  shape,
 }: GlassSurfaceOptions = {}): string {
-  if (isLinuxWebview()) return LINUX_SURFACE_FALLBACK;
+  // The Linux fallback has no glass material, but it is still a panel and
+  // still needs a shape, so the semantic class comes along either way.
+  const shapeClass = shape ? `surface-${shape}` : "";
+  if (isLinuxWebview())
+    return [LINUX_SURFACE_FALLBACK, shapeClass].filter(Boolean).join(" ");
 
   return [
     "relative isolate liquid-glass glass-material text-foreground",
     `glass-material-${variant}`,
     `glass-material-${scale}`,
     player ? "liquid-glass-player" : "",
+    shapeClass,
   ]
     .filter(Boolean)
     .join(" ");
@@ -57,6 +75,7 @@ export const STATIC_GLASS_CONTROL_CLASS = glassSurfaceClass({
 export const PLAYER_GLASS_SURFACE_CLASS = glassSurfaceClass({
   scale: "large",
   player: true,
+  shape: "player",
 });
 
 /** Static large-panel material used by the low-cost floating WebView path. */
@@ -64,10 +83,17 @@ export const STATIC_PLAYER_GLASS_SURFACE_CLASS = glassSurfaceClass({
   variant: "static",
   scale: "large",
   player: true,
+  shape: "player",
 });
 
 /** Menus/popovers use the medium semantic scale (16px Glass radius). */
-export const MENU_GLASS_SURFACE_CLASS = glassSurfaceClass({ scale: "medium" });
+export const MENU_GLASS_SURFACE_CLASS = glassSurfaceClass({
+  scale: "medium",
+  shape: "menu",
+});
 
 /** Dialogs share the large-panel construction from the Figma specimen. */
-export const DIALOG_GLASS_SURFACE_CLASS = glassSurfaceClass({ scale: "large" });
+export const DIALOG_GLASS_SURFACE_CLASS = glassSurfaceClass({
+  scale: "large",
+  shape: "menu",
+});

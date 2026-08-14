@@ -76,6 +76,10 @@ import {
   removePlaylistEntryFromPages,
   type PlaylistPageChunk,
 } from "@/lib/innertube/playlist-cache";
+import {
+  notePlaylistCreated,
+  USER_PLAYLISTS_KEY,
+} from "@/lib/playlist-library-cache";
 import { usePlaybackStore } from "@/lib/store/playback";
 import type { ShelfItem } from "@/lib/innertube/types";
 import { syncLastfmLove } from "@/lib/lastfm";
@@ -130,7 +134,9 @@ export function useTrackMenuController(item: ShelfItem) {
   });
 
   const playlists = useQuery({
-    queryKey: ["user-playlists"],
+    queryKey: USER_PLAYLISTS_KEY,
+    // `fetchUserPlaylists` reconciles the response against just-made
+    // create/deletes; YouTube's library index lags them by a few seconds.
     queryFn: () => fetchUserPlaylists(),
     staleTime: 60_000,
     retry: false,
@@ -584,8 +590,11 @@ export function NewPlaylistDialog({
     if (!t || busy) return;
     setBusy(true);
     try {
-      await createPlaylistWithTrack(t, videoId);
-      await qc.invalidateQueries({ queryKey: ["user-playlists"] });
+      const id = await createPlaylistWithTrack(t, videoId);
+      // The library index lags the create, so seed the caches before the
+      // refetch or the stale response lands on top of the new playlist.
+      notePlaylistCreated(qc, { id, title: t, subtitle: "1 song" });
+      await qc.invalidateQueries({ queryKey: USER_PLAYLISTS_KEY });
       await qc.invalidateQueries({ queryKey: ["library"] });
       toast.success(`Created "${t}"`);
       onOpenChange(false);

@@ -1,4 +1,5 @@
 import { resetAuthCache } from "./shared";
+import { resetPendingPlaylistEdits } from "@/lib/playlist-library-cache";
 
 /**
  * The whole InnerTube data layer is the hand-rolled raw-POST client in
@@ -13,4 +14,10 @@ import { resetAuthCache } from "./shared";
  */
 export function resetInnertube() {
   resetAuthCache();
+  // Pending playlist corrections belong to whoever made them. They are keyed
+  // only by playlist id, so carrying them across a sign-in/out or an account
+  // or channel switch would inject one identity's new playlist into another's
+  // library — and keep it there, since the new account's responses will never
+  // contain that id to retire it.
+  resetPendingPlaylistEdits();
 }

@@ -12,6 +12,30 @@ const AIR_REFRACTIVE_INDEX = 1;
 const PROFILE_SAMPLES = 127;
 export const WINDOWS_UI_SUPERELLIPSE_K = 1;
 
+/**
+ * Read the superellipse exponent out of a `corner-shape` value so the glass
+ * map is built from the same geometry contract the element is painted with.
+ *
+ * Accepts the `superellipse(k)` function plus the CSS keywords that are
+ * defined as fixed points on the same curve family. Anything unparseable
+ * (including an unset variable on a surface outside the three systems) falls
+ * back to the round Windows-UI endpoint, which is the historical behaviour.
+ */
+export function parseSuperellipseK(value: string): number {
+  const shape = value.trim().toLowerCase();
+  if (!shape) return WINDOWS_UI_SUPERELLIPSE_K;
+  // `squircle` is the k=4 member of the family; `round` is the k=1 endpoint.
+  if (shape === "squircle") return 4;
+  if (shape === "round") return 1;
+  const match = /^superellipse\(\s*([0-9.]+)\s*\)$/.exec(shape);
+  if (!match) return WINDOWS_UI_SUPERELLIPSE_K;
+  const parsed = Number.parseFloat(match[1]);
+  // Guard the SDF: a zero or negative exponent degrades to a sharp rect.
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : WINDOWS_UI_SUPERELLIPSE_K;
+}
+
 // Figma Glass preset supplied by the product owner. Keep this as the single
 // optics source of truth for players, menus, popovers, and dialogs.
 export const FIGMA_GLASS_PRESET = {
@@ -208,16 +232,57 @@ const GLASS_VARIANTS: Record<GlassRendererVariant, GlassVariantConfig> = {
   // Effective-resolution sweep. The low-frequency branches read a coarsely
   // point-sampled backdrop instead of a re-blurred one; both colour and
   // luminance feed from it, since the target is broad diffusion of both.
-  R1: { ...GLASS_VARIANT_BASE, lowResBlock: 4, wash: 18, luma: 18, lumaBlur: 12 },
-  R2: { ...GLASS_VARIANT_BASE, lowResBlock: 8, wash: 18, luma: 18, lumaBlur: 12 },
-  R3: { ...GLASS_VARIANT_BASE, lowResBlock: 16, wash: 18, luma: 18, lumaBlur: 12 },
+  R1: {
+    ...GLASS_VARIANT_BASE,
+    lowResBlock: 4,
+    wash: 18,
+    luma: 18,
+    lumaBlur: 12,
+  },
+  R2: {
+    ...GLASS_VARIANT_BASE,
+    lowResBlock: 8,
+    wash: 18,
+    luma: 18,
+    lumaBlur: 12,
+  },
+  R3: {
+    ...GLASS_VARIANT_BASE,
+    lowResBlock: 16,
+    wash: 18,
+    luma: 18,
+    lumaBlur: 12,
+  },
   // Edge-caustic sweep over R3. Only the caustic differs between these and R3,
   // so anything that changes is backdrop-derived rim colour and nothing else.
-  E1: { ...GLASS_VARIANT_BASE, lowResBlock: 16, wash: 18, luma: 18, lumaBlur: 12, edgeCaustic: 25, edgeCausticWidth: 3 },
-  E2: { ...GLASS_VARIANT_BASE, lowResBlock: 16, wash: 18, luma: 18, lumaBlur: 12, edgeCaustic: 45, edgeCausticWidth: 3 },
-  E3: { ...GLASS_VARIANT_BASE, lowResBlock: 16, wash: 18, luma: 18, lumaBlur: 12, edgeCaustic: 45, edgeCausticWidth: 6 },
+  E1: {
+    ...GLASS_VARIANT_BASE,
+    lowResBlock: 16,
+    wash: 18,
+    luma: 18,
+    lumaBlur: 12,
+    edgeCaustic: 25,
+    edgeCausticWidth: 3,
+  },
+  E2: {
+    ...GLASS_VARIANT_BASE,
+    lowResBlock: 16,
+    wash: 18,
+    luma: 18,
+    lumaBlur: 12,
+    edgeCaustic: 45,
+    edgeCausticWidth: 3,
+  },
+  E3: {
+    ...GLASS_VARIANT_BASE,
+    lowResBlock: 16,
+    wash: 18,
+    luma: 18,
+    lumaBlur: 12,
+    edgeCaustic: 45,
+    edgeCausticWidth: 6,
+  },
 };
-
 
 /**
  * Pinned variant, used when the dev selector is unavailable — a packaged build,
@@ -614,10 +679,7 @@ function createMaps(
   // or the corners keep a 1px round the element does not have.
   const rasterRadius = Math.max(0, radius * rasterScale);
   const maximumDepth = Math.max(1, Math.min(rasterWidth, rasterHeight) / 2 - 1);
-  const bezelWidth = Math.min(
-    maximumDepth,
-    lens.depth * rasterScale,
-  );
+  const bezelWidth = Math.min(maximumDepth, lens.depth * rasterScale);
   const profile = createConvexRefractionProfile(lens.refraction);
   const specularRimWidth = Math.max(1, FIGMA_SPECULAR_RIM_WIDTH * rasterScale);
 
@@ -757,7 +819,8 @@ function createQuantiseMap(
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas 2D is unavailable for the quantise map");
+  if (!context)
+    throw new Error("Canvas 2D is unavailable for the quantise map");
   const image = context.createImageData(width, height);
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
@@ -826,11 +889,7 @@ function evictToBudget<T>(
  * Bucketed to 32px like the displacement maps, so a resize reuses a map rather
  * than rasterising a new one per frame.
  */
-function getQuantiseMap(
-  width: number,
-  height: number,
-  block: number,
-): string {
+function getQuantiseMap(width: number, height: number, block: number): string {
   const bucket = (value: number) => Math.max(32, Math.round(value / 32) * 32);
   const bucketWidth = bucket(width);
   const bucketHeight = bucket(height);
@@ -917,8 +976,7 @@ function appendFilter(
   // Declared per-primitive: the filter as a whole stays sRGB so the map stages
   // keep their vector channels intact, and only the stages that average real
   // colour opt out.
-  const frostSpace =
-    GLASS_COLOR_SPACE_MODE === "srgb" ? "sRGB" : "linearRGB";
+  const frostSpace = GLASS_COLOR_SPACE_MODE === "srgb" ? "sRGB" : "linearRGB";
   const mixSpace = GLASS_COLOR_SPACE_MODE === "full" ? "linearRGB" : "sRGB";
 
   // Whichever contamination stage runs last owns the final `dispersed` name, so
@@ -958,7 +1016,9 @@ function appendFilter(
   // The refraction branch's input. Production bends the frosted texture, which
   // has no high-frequency detail left; the bezel path bends the raw backdrop
   // (saturation matched so only sharpness differs between the branches).
-  const refractionSource = GLASS_BEZEL_REFRACTION ? "raw_source" : "blurred_source";
+  const refractionSource = GLASS_BEZEL_REFRACTION
+    ? "raw_source"
+    : "blurred_source";
   if (GLASS_BEZEL_REFRACTION) {
     // A light low-pass ahead of the lens: raw reads as a sharp copy of the
     // background pasted into the bezel, so the branch is softened just enough
@@ -1004,9 +1064,7 @@ function appendFilter(
   });
   const baseScale = maps.maximumDisplacement * refractionLevel;
   const channelSplay =
-    maps.maximumDisplacement *
-    (lens.dispersion / 100) *
-    (lens.splay / 100);
+    maps.maximumDisplacement * (lens.dispersion / 100) * (lens.splay / 100);
 
   // Figma exposes dispersion and splay as separate Glass-effect values. SVG
   // has no native chromatic-dispersion primitive, so the faithful web
@@ -1098,7 +1156,10 @@ function appendFilter(
     // representation, no extra raster; this reuses the map the SDF already
     // produced for displacement.
     const deviation = svgElement("feComponentTransfer");
-    setAttributes(deviation, { in: "displacement_map", result: "bezel_deviation" });
+    setAttributes(deviation, {
+      in: "displacement_map",
+      result: "bezel_deviation",
+    });
     const devR = svgElement("feFuncR");
     setAttributes(devR, { type: "table", tableValues: "1 0 1" });
     const devG = svgElement("feFuncG");
@@ -1654,9 +1715,14 @@ export function LiquidGlassDefs() {
         height / 2,
       );
       const isSmall = element.classList.contains("glass-material-small");
-      const superellipseK = element.classList.contains("liquid-glass-player")
-        ? 1
-        : WINDOWS_UI_SUPERELLIPSE_K;
+      // The exponent comes from the same `--surface-corner-shape` the element
+      // is actually drawn with, not from a class check. Hardcoding it here let
+      // the glass map trace a different curve than the panel the moment a
+      // surface system changed its shape — the radius was already read from
+      // computed style, so only the exponent could drift.
+      const superellipseK = parseSuperellipseK(
+        computed.getPropertyValue("--surface-corner-shape"),
+      );
       // Figma uses a 6px frost radius for small controls and 16px for both
       // medium and large panels. Preserve that ratio when the shared slider
       // changes the regular radius.
@@ -1670,7 +1736,11 @@ export function LiquidGlassDefs() {
       const lensKey = material.lens
         ? `${material.lens.refraction}-${material.lens.depth}-${material.lens.dispersion}-${material.lens.splay}`
         : "none";
-      const geometry = `${isSmall ? "small" : "regular"}-${material.performance ? "perf" : "full"}-${width}x${height}r${Math.round(radius)}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ''}w${GLASS_COLOR_WASH_STRENGTH}-${GLASS_COLOR_WASH_BLUR}m${GLASS_LUMA_WASH_STRENGTH}-${GLASS_LUMA_WASH_BLUR}-${GLASS_LUMA_WASH_MODE}q${GLASS_LOW_RES_BLOCK}e${GLASS_EDGE_CAUSTIC_STRENGTH}-${GLASS_EDGE_CAUSTIC_WIDTH}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
+      // `k${superellipseK}` belongs in this key: it is a geometry input now
+      // that it is read from the surface contract instead of a fixed class.
+      // Without it, changing a system's corner shape hits the early-return
+      // below and leaves the previous filter on screen.
+      const geometry = `${isSmall ? "small" : "regular"}-${material.performance ? "perf" : "full"}-${width}x${height}r${Math.round(radius)}k${superellipseK}b${blurLevel}v${GLASS_RENDERER_VARIANT}${GLASS_BEZEL_REFRACTION ? `z${GLASS_BEZEL_MASK_EXPONENT}` : ""}w${GLASS_COLOR_WASH_STRENGTH}-${GLASS_COLOR_WASH_BLUR}m${GLASS_LUMA_WASH_STRENGTH}-${GLASS_LUMA_WASH_BLUR}-${GLASS_LUMA_WASH_MODE}q${GLASS_LOW_RES_BLOCK}e${GLASS_EDGE_CAUSTIC_STRENGTH}-${GLASS_EDGE_CAUSTIC_WIDTH}s${material.saturation}l${lensKey}${material.applyRegularPaints ? "p" : "n"}d${material.luminosity}-${material.shade}g${material.grain}t${material.frameTint}h${material.sheen}`;
       if (registration.geometry === geometry) return;
       registration.geometry = geometry;
 

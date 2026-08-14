@@ -20,7 +20,13 @@ import {
   setPlaylistDescription,
   setPlaylistPrivacy,
   type PlaylistPrivacy,
+  type UserPlaylist,
 } from "@/lib/innertube/mutations";
+import {
+  notePlaylistCreated,
+  notePlaylistDeleted,
+  USER_PLAYLISTS_KEY,
+} from "@/lib/playlist-library-cache";
 import { cn } from "@/lib/utils";
 
 const PRIVACY_OPTIONS: { value: PlaylistPrivacy; label: string }[] = [
@@ -38,9 +44,22 @@ const PRIVACY_OPTIONS: { value: PlaylistPrivacy; label: string }[] = [
  */
 function usePlaylistCacheRefresh() {
   const qc = useQueryClient();
-  return async (playlistId?: string) => {
+  return async (
+    playlistId?: string,
+    /**
+     * A create/delete that just happened. YouTube's library index is
+     * eventually consistent, so the refetch below often still answers from a
+     * pre-mutation snapshot; recording the edit first keeps the change on
+     * screen instead of letting that stale response overwrite it.
+     */
+    edit?:
+      | { type: "created"; playlist: UserPlaylist }
+      | { type: "deleted"; playlistId: string },
+  ) => {
+    if (edit?.type === "created") notePlaylistCreated(qc, edit.playlist);
+    if (edit?.type === "deleted") notePlaylistDeleted(qc, edit.playlistId);
     await Promise.all([
-      qc.invalidateQueries({ queryKey: ["user-playlists"] }),
+      qc.invalidateQueries({ queryKey: USER_PLAYLISTS_KEY }),
       qc.invalidateQueries({ queryKey: ["library"] }),
       playlistId
         ? qc.invalidateQueries({ queryKey: ["playlist-pages"] })
@@ -126,7 +145,16 @@ export function CreatePlaylistDialog({
         privacy,
         videoIds,
       });
-      await refresh();
+      await refresh(undefined, {
+        type: "created",
+        playlist: {
+          id,
+          title: name,
+          subtitle: videoIds?.length
+            ? `${videoIds.length} ${videoIds.length === 1 ? "song" : "songs"}`
+            : undefined,
+        },
+      });
       toast.success(`Created “${name}”`);
       onOpenChange(false);
       onCreated?.(id);
@@ -182,7 +210,10 @@ export function CreatePlaylistDialog({
           >
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy || !title.trim()}>
+          <Button
+            onClick={() => void submit()}
+            disabled={busy || !title.trim()}
+          >
             {busy && <Loader2Icon className="animate-spin" />}
             Create
           </Button>
@@ -320,7 +351,10 @@ export function EditPlaylistDialog({
           >
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={busy || !title.trim()}>
+          <Button
+            onClick={() => void submit()}
+            disabled={busy || !title.trim()}
+          >
             {busy && <Loader2Icon className="animate-spin" />}
             Save
           </Button>
@@ -352,7 +386,7 @@ export function DeletePlaylistDialog({
     setBusy(true);
     try {
       await deletePlaylist(playlistId);
-      await refresh(playlistId);
+      await refresh(playlistId, { type: "deleted", playlistId });
       toast.success(`Deleted “${title}”`);
       onOpenChange(false);
       onDeleted?.();
@@ -369,8 +403,8 @@ export function DeletePlaylistDialog({
         <DialogHeader>
           <DialogTitle>Delete “{title}”?</DialogTitle>
           <DialogDescription>
-            This removes the playlist from your YouTube Music account. It
-            can't be undone from Goosic.
+            This removes the playlist from your YouTube Music account. It can't
+            be undone from Goosic.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

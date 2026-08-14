@@ -12,6 +12,7 @@ import {
   PinOffIcon,
   SearchIcon,
   SquareIcon,
+  Trash2Icon,
   XIcon,
 } from "lucide-react";
 import {
@@ -53,6 +54,7 @@ import {
   cancelPlaylistDownload,
   offlineIdentityKey,
   playlistDownloadKey,
+  removePlaylistDownload,
   retryPlaylistDownload,
   startPlaylistDownload,
   useOfflinePlaylistStore,
@@ -110,6 +112,7 @@ function PlaylistPageView() {
   const [preparingDownload, setPreparingDownload] = useState(false);
   const [preparingOfflinePlayback, setPreparingOfflinePlayback] =
     useState(false);
+  const [removingDownload, setRemovingDownload] = useState(false);
   const [cooldownClock, setCooldownClock] = useState(() => Date.now());
   const downloadPreparationAbortRef = useRef<AbortController | null>(null);
   useEffect(
@@ -133,6 +136,28 @@ function PlaylistPageView() {
         : offlineQueueForPlaylist(tracks, offlineLibrary.data ?? []),
     [manifest, tracks, offlineLibrary.data],
   );
+  // Manifests persist across restarts; the files they describe can be deleted
+  // from Storage at any time. Once the library has actually loaded and nothing
+  // of this manifest survives on disk, drop it — otherwise the playlist keeps
+  // presenting itself as downloaded on every launch with no audio behind it.
+  useEffect(() => {
+    if (!identityKey || !manifest || !offlineLibrary.isSuccess) return;
+    if (availableOfflineTracks.length > 0) return;
+    useOfflinePlaylistStore
+      .getState()
+      .pruneMissing(
+        (offlineLibrary.data ?? [])
+          .filter((entry) => entry.valid)
+          .map((entry) => entry.videoId),
+      );
+  }, [
+    identityKey,
+    manifest,
+    offlineLibrary.isSuccess,
+    offlineLibrary.data,
+    availableOfflineTracks.length,
+  ]);
+
   const offlineComplete =
     !!manifest &&
     manifest.tracks.length > 0 &&
@@ -315,8 +340,18 @@ function PlaylistPageView() {
       // The visible route is lazily paginated; offline means the whole
       // playlist, so use the strict continuation drain before starting.
       const full = await fetchPlaylistStrict(id, { signal: controller.signal });
-      downloadPreparationAbortRef.current = null;
       setPreparingDownload(false);
+      // The drain can finish after a cancel (or a removal) was requested. The
+      // signal is the only record of that, so re-check it before committing a
+      // manifest and starting native downloads.
+      if (controller.signal.aborted) {
+        toast.info("Playlist download preparation cancelled.");
+        return;
+      }
+      // The ref stays published across this await. Clearing it before the
+      // batch exists left a window where a removal could neither abort the
+      // preparation nor see a running batch, so it deleted the old files and
+      // this line then started downloading them again.
       await startPlaylistDownload(id, header.title, full.tracks);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
@@ -333,6 +368,36 @@ function PlaylistPageView() {
         downloadPreparationAbortRef.current = null;
         setPreparingDownload(false);
       }
+    }
+  };
+
+  const removeDownload = async () => {
+    if (!identityKey || !manifest) return;
+    if (
+      !confirm(
+        `Remove the downloaded copy of ${header.title}? This deletes ${manifest.tracks.length} local files.`,
+      )
+    )
+      return;
+    // A download whose playlist drain is still running has no batch yet, so
+    // `batchActive` cannot see it. Left alone it would start right after the
+    // removal finishes and silently re-download everything the user just
+    // deleted, so cancel the preparation before touching any files.
+    downloadPreparationAbortRef.current?.abort();
+    downloadPreparationAbortRef.current = null;
+    setPreparingDownload(false);
+    setRemovingDownload(true);
+    try {
+      await removePlaylistDownload(identityKey, id);
+      toast.success(`Removed the download of ${header.title}`);
+    } catch (error) {
+      toast.error(
+        `Couldn't remove download: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    } finally {
+      setRemovingDownload(false);
     }
   };
 
@@ -402,7 +467,11 @@ function PlaylistPageView() {
             <Button
               variant="outline"
               onClick={() => void downloadPlaylist()}
-              disabled={batch?.phase === "cancelling" || retryCoolingDown}
+              disabled={
+                batch?.phase === "cancelling" ||
+                retryCoolingDown ||
+                removingDownload
+              }
             >
               {preparingDownload || batch?.phase === "downloading" ? (
                 <SquareIcon />
@@ -448,6 +517,23 @@ function PlaylistPageView() {
                   : availableOfflineTracks.length > 0
                     ? "Play downloaded"
                     : "Check downloaded"}
+              </Button>
+            ) : null}
+            {/* Removing a download is deliberately not gated on Premium — a
+                user who lost entitlement must still be able to free the disk. */}
+            {manifest && !batchActive ? (
+              <Button
+                variant="outline"
+                onClick={() => void removeDownload()}
+                disabled={removingDownload}
+                className="border-destructive/50 text-destructive hover:border-destructive hover:bg-destructive/10 hover:text-destructive dark:border-destructive/50 dark:hover:bg-destructive/10"
+              >
+                {removingDownload ? (
+                  <Loader2Icon className="animate-spin" />
+                ) : (
+                  <Trash2Icon />
+                )}
+                {removingDownload ? "Removing…" : "Remove download"}
               </Button>
             ) : null}
             {isLikedSongs ? null : (

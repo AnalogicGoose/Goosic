@@ -511,7 +511,7 @@ export function PlayerBar({
   // window's own layout.
   const wrapperClass =
     variant === "right"
-      ? "fixed bottom-2 right-2 top-(--titlebar-h) z-10 flex w-[22rem] flex-col rounded-[34px] border"
+      ? "fixed bottom-2 right-2 top-(--titlebar-h) z-10 flex w-[22rem] flex-col surface-player"
       : fullscreen
         ? "absolute inset-0 z-10 flex flex-col bg-transparent text-foreground"
         : "absolute inset-0 flex flex-col bg-transparent";
@@ -667,7 +667,7 @@ export function PlayerBar({
                     "mx-auto w-full max-w-[20rem] touch-none select-none",
                     variant === "right" && "cursor-grab active:cursor-grabbing",
                     fullscreen &&
-                      "max-w-[min(48vh,36rem)] cursor-zoom-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80",
+                      "max-w-[min(48vh,36rem)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80",
                   )}
                 >
                   {track ? (

@@ -76,6 +76,13 @@ type ManifestData = {
 type ManifestState = {
   save: (identityKey: string, manifest: OfflinePlaylistManifest) => void;
   remove: (identityKey: string, playlistId: string) => void;
+  /**
+   * Drop every manifest that no longer has a single playable file on disk.
+   * Manifests persist to localStorage but the files they describe do not, so
+   * without this a Storage deletion leaves a playlist claiming to be
+   * downloaded forever — the state survives restarts, the audio does not.
+   */
+  pruneMissing: (playableFileIds: Iterable<string>) => void;
 } & ManifestData;
 
 export function offlineIdentityKey(
@@ -148,6 +155,47 @@ export const useOfflinePlaylistStore = create<ManifestState>()(
           }
           return { manifestsByIdentity };
         }),
+      pruneMissing: (playableFileIds) =>
+        set((state) => {
+          const playable = new Set(playableFileIds);
+          const manifestsByIdentity: ManifestData["manifestsByIdentity"] = {};
+          let changed = false;
+          for (const [identityKey, manifests] of Object.entries(
+            state.manifestsByIdentity,
+          )) {
+            const kept: Record<string, OfflinePlaylistManifest> = {};
+            for (const [playlistId, manifest] of Object.entries(manifests)) {
+              // A running batch commits its manifest up front and never saves
+              // it again, so between the commit and the first finished file it
+              // legitimately has nothing on disk. Pruning there would delete
+              // the record of a download that goes on to succeed.
+              if (
+                activeRunners.has(playlistDownloadKey(identityKey, playlistId))
+              ) {
+                kept[playlistId] = manifest;
+                continue;
+              }
+              // One surviving file still makes the manifest worth keeping:
+              // partial downloads are a legitimate state, and `Play
+              // downloaded` already filters the queue against disk. Only a
+              // manifest with nothing left behind it is a lie.
+              if (
+                manifest.tracks.some(
+                  (track) =>
+                    !!track.offlineVideoId &&
+                    playable.has(track.offlineVideoId),
+                )
+              ) {
+                kept[playlistId] = manifest;
+              } else {
+                changed = true;
+              }
+            }
+            if (Object.keys(kept).length)
+              manifestsByIdentity[identityKey] = kept;
+          }
+          return changed ? { manifestsByIdentity } : state;
+        }),
     }),
     {
       name: "goosic-offline-playlists",
@@ -164,6 +212,7 @@ export const useOfflinePlaylistStore = create<ManifestState>()(
 type State = {
   batches: Record<string, PlaylistDownloadBatch>;
   upsert: (batch: PlaylistDownloadBatch) => void;
+  clear: (identityKey: string, playlistId: string) => void;
 };
 
 export const usePlaylistDownloadStore = create<State>()((set) => ({
@@ -175,10 +224,25 @@ export const usePlaylistDownloadStore = create<State>()((set) => ({
         [playlistDownloadKey(batch.identityKey, batch.playlistId)]: batch,
       },
     })),
+  clear: (identityKey, playlistId) =>
+    set((state) => {
+      const key = playlistDownloadKey(identityKey, playlistId);
+      if (!(key in state.batches)) return state;
+      const batches = { ...state.batches };
+      delete batches[key];
+      return { batches };
+    }),
 }));
 
 const activeRunners = new Set<string>();
 const cancellationRequests = new Set<string>();
+/**
+ * Playlists whose removal has started but not finished, keyed the same way as
+ * `activeRunners`. Their manifests are still persisted — deliberately, so a
+ * crash mid-delete cannot orphan the files — but they must not count as live
+ * references when a concurrent removal decides which shared files to keep.
+ */
+const playlistsBeingRemoved = new Set<string>();
 
 type OfflineIdentity = {
   accountId: string;
@@ -418,21 +482,24 @@ async function runPlaylistDownload(
     // boolean. Re-check on a bounded cadence so a downgrade or logout cannot
     // keep a long-running playlist batch authorized indefinitely. The helper
     // skips network work while the last successful probe remains fresh.
-    entitlementVerificationTimer = setInterval(() => {
-      if (entitlementVerificationInFlight || !acceptBoundaryEvents) return;
-      entitlementVerificationInFlight = true;
-      void verifyPremiumDownloadEntitlement()
-        .catch((error) => {
-          cancelForBoundaryChange(
-            error instanceof Error
-              ? error.message
-              : "Live YouTube Music Premium verification was lost.",
-          );
-        })
-        .finally(() => {
-          entitlementVerificationInFlight = false;
-        });
-    }, Math.min(PREMIUM_DOWNLOAD_MONITOR_MS, PREMIUM_DOWNLOAD_LIVE_MAX_AGE_MS));
+    entitlementVerificationTimer = setInterval(
+      () => {
+        if (entitlementVerificationInFlight || !acceptBoundaryEvents) return;
+        entitlementVerificationInFlight = true;
+        void verifyPremiumDownloadEntitlement()
+          .catch((error) => {
+            cancelForBoundaryChange(
+              error instanceof Error
+                ? error.message
+                : "Live YouTube Music Premium verification was lost.",
+            );
+          })
+          .finally(() => {
+            entitlementVerificationInFlight = false;
+          });
+      },
+      Math.min(PREMIUM_DOWNLOAD_MONITOR_MS, PREMIUM_DOWNLOAD_LIVE_MAX_AGE_MS),
+    );
     await initializeOfflineDownloads();
     await verifyPremiumDownloadEntitlement();
     const activeIdentity = await readActiveOfflineIdentity();
@@ -624,6 +691,91 @@ export async function retryPlaylistDownload(
     );
   }
   await runPlaylistDownload({ ...batch, phase: "preparing" });
+}
+
+/**
+ * Delete a downloaded playlist: its files first, then its manifest. Files that
+ * another still-downloaded playlist also uses are kept, since offline files are
+ * shared by stream id rather than owned by one playlist.
+ *
+ * Removing a download is never an entitled operation — a user who loses Premium
+ * must still be able to reclaim the disk space.
+ */
+export async function removePlaylistDownload(
+  identityKey: string,
+  playlistId: string,
+): Promise<void> {
+  // Deleting the files a live batch is still writing would race the native
+  // downloader, so require an explicit cancel first rather than half-removing.
+  const runnerKey = playlistDownloadKey(identityKey, playlistId);
+  if (activeRunners.has(runnerKey)) {
+    throw new Error("Cancel the playlist download before removing it.");
+  }
+  const manifest =
+    useOfflinePlaylistStore.getState().manifestsByIdentity[identityKey]?.[
+      playlistId
+    ];
+  if (!manifest) return;
+
+  // Claim the playlist for the whole removal. Native deletion is awaited, and
+  // a download started during that gap would commit a fresh manifest that the
+  // rest of this function would then delete — leaving a running batch whose
+  // record cannot survive a restart. Holding the runner slot makes a
+  // concurrent start fail fast instead, and also keeps `pruneMissing` off the
+  // manifest while its files are disappearing.
+  activeRunners.add(runnerKey);
+  // Mark this playlist as leaving before reading the survivor set, so a
+  // concurrent removal of a playlist that shares a track does not treat this
+  // one as a live reference. Both would otherwise defer the shared file to the
+  // other and leave it on disk with nothing pointing at it. The manifest — the
+  // only record that survives a restart — stays persisted until the files are
+  // actually gone.
+  playlistsBeingRemoved.add(runnerKey);
+  try {
+    const shared = new Set<string>();
+    for (const [otherIdentity, manifests] of Object.entries(
+      useOfflinePlaylistStore.getState().manifestsByIdentity,
+    )) {
+      for (const [otherPlaylistId, other] of Object.entries(manifests)) {
+        if (
+          playlistsBeingRemoved.has(
+            playlistDownloadKey(otherIdentity, otherPlaylistId),
+          )
+        )
+          continue;
+        for (const track of other.tracks) {
+          if (track.offlineVideoId) shared.add(track.offlineVideoId);
+        }
+      }
+    }
+
+    const videoIds = [
+      ...new Set(
+        manifest.tracks
+          .map((track) => track.offlineVideoId)
+          .filter(
+            (videoId): videoId is string => !!videoId && !shared.has(videoId),
+          ),
+      ),
+    ];
+
+    // An empty list is rejected native-side as a guard against wipe-all bugs,
+    // and a fully shared playlist has no files of its own to delete.
+    if (videoIds.length) {
+      await invoke<number>("delete_cache_entries", { videoIds });
+      useOfflineDownloadStore.getState().remove(videoIds);
+    }
+    // Retire the record only once the audio it describes is gone. Dropping it
+    // first meant a crash mid-delete left files on disk with no manifest; this
+    // way the worst case is a manifest whose files are already deleted, which
+    // `pruneMissing` clears on the next launch.
+    useOfflinePlaylistStore.getState().remove(identityKey, playlistId);
+    usePlaylistDownloadStore.getState().clear(identityKey, playlistId);
+  } finally {
+    playlistsBeingRemoved.delete(runnerKey);
+    activeRunners.delete(runnerKey);
+  }
+  await queryClient.invalidateQueries({ queryKey: OFFLINE_LIBRARY_QUERY_KEY });
 }
 
 export async function cancelPlaylistDownload(

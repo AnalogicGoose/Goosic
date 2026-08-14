@@ -78,7 +78,7 @@ export default function FloatingPlayerApp() {
                 hasNativeMaterial || windowsGlass
                   ? PLAYER_GLASS_SURFACE_CLASS
                   : STATIC_PLAYER_GLASS_SURFACE_CLASS,
-                "relative z-10 flex h-full w-full flex-col overflow-hidden rounded-[16px] border",
+                "relative z-10 flex h-full w-full flex-col",
                 hasNativeMaterial && "native-player-material",
               )}
             >

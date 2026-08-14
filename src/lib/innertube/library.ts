@@ -37,8 +37,21 @@ async function browseSections(browseId: string): Promise<LibrarySection[]> {
   return out;
 }
 
-export function fetchLibraryPlaylists(): Promise<LibrarySection[]> {
-  return browseSections("FEmusic_liked_playlists");
+/**
+ * Every consumer of the library playlists shelf goes through here — the
+ * sidebar, the Library page, and the saved-id membership check — so the
+ * reconciliation against just-created/deleted playlists lives at this single
+ * point rather than at each call site. YouTube's library index is eventually
+ * consistent: a browse issued right after a mutation frequently still answers
+ * from a pre-mutation snapshot, and without this the stale response would be
+ * written back over the change until the app restarts.
+ */
+export async function fetchLibraryPlaylists(): Promise<LibrarySection[]> {
+  const { reconcileLibrarySections } =
+    await import("@/lib/playlist-library-cache");
+  return reconcileLibrarySections(
+    await browseSections("FEmusic_liked_playlists"),
+  );
 }
 
 export function fetchLibraryAlbums(): Promise<LibrarySection[]> {

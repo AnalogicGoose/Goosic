@@ -115,11 +115,17 @@ export async function fetchUserPlaylists(): Promise<UserPlaylist[]> {
   // De-dupe on id — some responses include the same playlist in multiple
   // shelves (e.g. "Recently added" + "Your playlists").
   const seen = new Set<string>();
-  return out.filter((p) => {
+  const deduped = out.filter((p) => {
     if (seen.has(p.id)) return false;
     seen.add(p.id);
     return true;
   });
+  // Reconcile here rather than at each call site: YouTube's library index lags
+  // a create/delete, so a browse issued right after one still answers from a
+  // pre-mutation snapshot and would otherwise overwrite the change.
+  const { reconcileUserPlaylists } =
+    await import("@/lib/playlist-library-cache");
+  return reconcileUserPlaylists(deduped);
 }
 
 function readRun(node: YtNode | undefined): string {

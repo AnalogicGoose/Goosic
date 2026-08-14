@@ -35,6 +35,7 @@ import { Group, SettingRow, TabPane } from "@/components/settings/primitives";
 import { formatBytes, formatRelative } from "@/lib/format";
 import { fetchLibraryTracks } from "@/lib/innertube/library";
 import { useOfflineDownloadStore } from "@/lib/store/offline-downloads";
+import { useOfflinePlaylistStore } from "@/lib/store/playlist-downloads";
 import { usePremiumStore } from "@/lib/store/premium";
 import { openPremiumGate } from "@/lib/store/premium-gate";
 import { usePlaybackStore } from "@/lib/store/playback";
@@ -82,7 +83,7 @@ function StatCard({
   value: string;
 }) {
   return (
-    <div className="flex flex-col gap-1 rounded-[34px] border bg-background p-4 shadow-xs dark:border-input dark:bg-input/30">
+    <div className="surface-menu flex flex-col gap-1 bg-background p-4 shadow-xs dark:bg-input/30">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Icon className="size-3.5 text-foreground" />
         {label}
@@ -401,6 +402,19 @@ function CacheGroup({ loggedIn }: { loggedIn: boolean }) {
       });
       await qc.invalidateQueries({ queryKey: OFFLINE_LIBRARY_QUERY_KEY });
       useOfflineDownloadStore.getState().remove(ids.length ? ids : undefined);
+      // Playlist manifests are persisted but the files they point at are not.
+      // Re-read what actually survived on disk and drop any manifest left with
+      // nothing, otherwise the playlist still claims to be downloaded after a
+      // restart even though its audio is gone.
+      const remaining = await qc.fetchQuery({
+        queryKey: OFFLINE_LIBRARY_QUERY_KEY,
+        queryFn: listOfflineTracks,
+      });
+      useOfflinePlaylistStore
+        .getState()
+        .pruneMissing(
+          remaining.filter((e) => e.valid).map((entry) => entry.videoId),
+        );
       toast.success(`${label} — freed ${formatBytes(freed)}`);
     } catch (e) {
       toast.error(String(e));

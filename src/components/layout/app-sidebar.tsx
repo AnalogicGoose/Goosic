@@ -61,6 +61,7 @@ import { openSettings } from "@/lib/store/settings-dialog";
 import { UpdateBanner } from "@/components/layout/update-banner";
 import { fetchAccountInfo } from "@/lib/innertube/account";
 import { fetchLibraryPlaylists } from "@/lib/innertube/library";
+import { LIBRARY_PLAYLISTS_KEY } from "@/lib/playlist-library-cache";
 import type { ShelfItem } from "@/lib/innertube/types";
 import { resetInnertube } from "@/lib/innertube/client";
 import { usePremiumStore } from "@/lib/store/premium";
@@ -90,7 +91,7 @@ const LIKED_ID = "VLLM";
 // 13px labels rather than 32px/14px. The icon sizing is pinned too, since the
 // smaller row would otherwise leave lucide's 16px glyphs looking oversized.
 const MENU_BTN_CLS =
-  "h-7 gap-2.5 text-[13px] [&>svg]:size-4 group-data-[collapsible=icon]:mx-auto";
+  "surface-item h-7 gap-2.5 text-[13px] hover:bg-black/8 hover:text-[#1a1a1a] dark:hover:bg-white/10 dark:hover:text-white [&>svg]:size-4 group-data-[collapsible=icon]:mx-auto";
 
 export function AppSidebar() {
   const { location } = useRouterState();
@@ -102,7 +103,7 @@ export function AppSidebar() {
     <Sidebar
       variant="sidebar"
       collapsible="icon"
-      innerClassName={cn(GLASS_SURFACE_CLASS, "sidebar-flush")}
+      innerClassName={cn(GLASS_SURFACE_CLASS, "surface-sidebar")}
       className="duration-300 ease-out"
     >
       {/* No logo header: macOS sidebars start straight into their content, and
@@ -194,7 +195,9 @@ function SidebarPlaylists({
     staleTime: 30_000,
   });
   const library = useQuery({
-    queryKey: ["library", "playlists"],
+    queryKey: LIBRARY_PLAYLISTS_KEY,
+    // `fetchLibraryPlaylists` reconciles the response against just-made
+    // create/deletes; YouTube's library index lags them by a few seconds.
     queryFn: fetchLibraryPlaylists,
     enabled: loggedIn.data === true,
     staleTime: 5 * 60_000,

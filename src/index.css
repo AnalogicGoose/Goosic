@@ -7,12 +7,11 @@
   /* Height of the custom title bar (see top-bar.tsx). Used by the
      floating sidebar / player CSS so they sit *under* the strip
      instead of overlapping the window-control buttons. */
-  --titlebar-h: 36px;
+  --titlebar-h: 2.25rem; /* 36px */
 
   /* YouTube brand red */
   --brand: #fa1f3e;
   --brand-foreground: oklch(0.985 0 0);
-
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -33,7 +32,7 @@
   --input: oklch(0.922 0 0);
   --ring: var(--brand);
   /* Figma corner-radius token: keep every semantic rounded utility aligned. */
-  --radius: 34px;
+  --radius: 2.125rem; /* 34px */
 
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -77,22 +76,159 @@
   border-color: transparent;
 }
 
-/* Unlayered so Tailwind radius utilities cannot override the Figma geometry.
-   Tailwind v4 emits every utility inside `@layer utilities`, and an unlayered
-   rule outranks any layered one by cascade-layer precedence — which is decided
-   before specificity, so this needs no priority override to win.
-   Small controls retain their component-specific pill/circle radius. */
-html.liquid-refract .glass-material:not(.glass-material-small) {
-  border-radius: 32px;
+/* ------------------------------------------------------------------ */
+/* Semantic shape systems                                              */
+/* ------------------------------------------------------------------ */
+
+/* Every rounded surface in the app belongs to exactly one of three systems.
+   Each owns its full geometry contract through these four variables:
+
+     --surface-radius        the corner radius
+     --surface-corner-shape  the superellipse exponent
+     --surface-overflow      how clipped content is contained
+     --surface-outline       the hairline drawn on the shape
+
+   Declaring them on the host means every descendant layer — glass
+   pseudo-elements, hover washes, borders, scroll clips — can resolve the same
+   geometry by inheritance instead of restating a literal radius. That is what
+   keeps a child from rendering a square corner or a pill against its host.
+
+   These blocks are unlayered on purpose. Tailwind v4 emits all utilities
+   inside `@layer utilities`, and layer precedence is resolved before
+   specificity, so an unlayered rule beats `rounded-*` on any element without
+   needing a priority override. */
+/* Radii are expressed in rem so the geometry scales with the root font size
+   instead of pinning the UI to device pixels. 1rem = 16px here: no `font-size`
+   is set on :root, so the browser default applies and each value below is the
+   exact equivalent of the px it replaced.
+
+   Hairlines stay in px on purpose. A 1px outline is a device-pixel detail, not
+   a typographic measure — scaling it produces sub-pixel widths that render as
+   a blurred grey line rather than a crisp rim. */
+.surface-player {
+  --surface-radius: 4rem; /* 50px */
+  --surface-corner-shape: superellipse(1.1);
+  --surface-overflow: hidden;
+  --surface-outline: 1px solid var(--hairline);
 }
-html.liquid-refract
-  .glass-material.liquid-glass-player:not(.glass-material-small) {
-  border-radius: 9999px;
-  corner-shape: round;
+
+/* Menus clip horizontally but must stay scrollable vertically: a dropdown
+   taller than its available height has to reach its lower items. The contract
+   therefore carries a separate block axis, which scrollable menus set to
+   `auto` via `.surface-scroll-y` rather than fighting the cascade with a
+   layered utility that an unlayered rule would outrank. */
+.surface-menu {
+  --surface-radius: 1.2rem;
+  --surface-corner-shape: superellipse(1);
+  --surface-overflow: hidden;
+  --surface-outline: 1px solid var(--hairline);
 }
-html.liquid-refract .liquid-glass-player::before,
-html.liquid-refract .liquid-glass-player::after {
-  corner-shape: round;
+
+.surface-sidebar {
+  /* Flush against the window edge; zero is unitless-equivalent either way. */
+  --surface-radius: 0rem;
+  --surface-corner-shape: superellipse(1);
+  --surface-overflow: hidden;
+  --surface-outline: none;
+}
+
+/* The host applies its own contract. Radius and corner-shape are the shape
+   itself; overflow keeps content inside it. The outline is drawn with
+   `outline` rather than `border` so it follows the superellipse without
+   consuming layout box or shifting padding.
+
+   Overflow is set per axis. Writing the shorthand here would make this
+   unlayered rule outrank any layered `overflow-y-auto` utility and silently
+   trap a scrollable menu's content, so the block axis defaults to the inline
+   value and surfaces that scroll override just that one variable. */
+.surface-player,
+.surface-menu,
+.surface-sidebar {
+  border-radius: var(--surface-radius);
+  corner-shape: var(--surface-corner-shape);
+  overflow-x: var(--surface-overflow);
+  overflow-y: var(--surface-overflow-block, var(--surface-overflow));
+  outline: var(--surface-outline);
+  outline-offset: -1px;
+}
+
+/* Opt a surface into vertical scrolling without leaving its shape contract.
+   Pairs with `.menu-shell-clip`, which masks the scrollbar to the same
+   corner radius so nothing leaks past the curve. */
+.surface-scroll-y {
+  --surface-overflow-block: auto;
+}
+
+/* Rows inside a surface (menu items, hover/selection washes) are nested
+   shapes, so they take the host radius minus their own inset rather than a
+   radius of their own. Deriving it here is what keeps a row from rendering as
+   a pill: `rounded-md` resolves to the 34px --radius token, which on a 32px
+   row is a full capsule and reads nothing like its 12px container.
+
+   Unlayered, so it outranks the `rounded-md` utility the shadcn items ship
+   with by layer precedence — no priority override involved. */
+.surface-player,
+.surface-menu,
+.surface-sidebar {
+  /* The horizontal inset each row is held off the surface edge by (mx-2). */
+  --surface-item-inset: 0.5rem; /* 8px */
+  /* Floor of 0.25rem (4px) so a flush surface still softens its rows. */
+  --surface-item-radius: max(
+    0.25rem,
+    calc(var(--surface-radius) - var(--surface-item-inset))
+  );
+}
+
+/* Sidebar rows opt into the menu-row curve. The sidebar host itself is flush,
+   but its interactive rows use the exact 0.7rem radius produced by a menu's
+   1.2rem surface minus its 0.5rem item inset. */
+.surface-sidebar {
+  --surface-item-radius: 0.7rem;
+}
+
+.surface-player .surface-item,
+.surface-menu .surface-item,
+.surface-sidebar .surface-item {
+  border-radius: var(--surface-item-radius);
+  corner-shape: var(--surface-corner-shape);
+}
+
+/* Child layers inherit the host shape rather than declaring their own. Any
+   descendant that paints to the surface edge — glass maps, hover washes,
+   selection highlights, artwork frames — resolves the same curve here, which
+   is what prevents a square corner appearing inside a rounded host. */
+.surface-player::before,
+.surface-player::after,
+.surface-menu::before,
+.surface-menu::after,
+.surface-sidebar::before,
+.surface-sidebar::after,
+.surface-player > .surface-layer,
+.surface-menu > .surface-layer,
+.surface-sidebar > .surface-layer {
+  border-radius: inherit;
+  corner-shape: inherit;
+}
+
+/* Album, playlist, and song artwork share Apple's continuous squircle
+   silhouette. Artwork is not one of the three surface systems — it is content,
+   not a panel — so it keeps its own fixed shape. Declared unlayered so
+   caller-specific `rounded-md`/`rounded-lg` utilities cannot change the shared
+   cover shape by layer precedence alone. Artist artwork opts into
+   `Thumbnail round` and remains circular. */
+.squircle-cover,
+.squircle-cover-frame,
+.squircle-cover-hover {
+  border-radius: 1.4rem; /* 22.4px */
+  corner-shape: squircle;
+}
+
+/* Layers that sit over a cover (play-state washes and hairlines). Unlike the
+   cover itself these are sibling elements, so they cannot inherit geometry
+   unless their parent is a squircle-cover-frame. */
+.squircle-cover-overlay {
+  border-radius: inherit;
+  corner-shape: squircle;
 }
 
 .native-player-material {
@@ -120,13 +256,9 @@ html body [data-slot="sidebar-container"] {
   z-index: 20;
 }
 
-/* A flush source list, not a floating card. Beats the global 32px glass radius
-   on specificity alone — same unlayered origin, one extra class (.sidebar-flush)
-   — and is declared after it, so no priority override is involved. */
-html.liquid-refract .glass-material.sidebar-flush:not(.glass-material-small),
-html body .sidebar-flush {
-  border-radius: 0;
-}
+/* The flush source-list geometry now comes from `.surface-sidebar` above; this
+   rule's old job (beating a global glass radius) no longer exists because no
+   global radius is declared. */
 
 /* The sidebar is a translucent overlay, not a column. Collapsing the layout
    gap shadcn reserves for it lets the content area span the full window, which
@@ -407,11 +539,17 @@ html body [data-slot="sidebar-gap"] {
 
   /* Chromium paints a scroll container's own scrollbar after border-radius
      clipping. An explicit rounded clip masks both rows and thumbs so nothing
-     can leak through a 34px menu/popover corner. */
+     can leak through a menu/popover corner. The radius is derived from the
+     surface contract rather than restated, so it tracks `--surface-radius`
+     automatically instead of drifting from it. */
   .menu-shell-clip {
     /* Leave the 1px reflector outside the clipping plane. Clipping exactly
-       at zero cut the antialiased rim on scrollable menus into hard lines. */
-    clip-path: inset(-1px round 35px);
+       at zero cut the antialiased rim on scrollable menus into hard lines, so
+       the clip radius is one pixel larger than the surface radius to match.
+       That offset stays in px while the radius is in rem: it exists to clear
+       the device pixel grid, so scaling it with the font size would reintroduce
+       the sub-pixel seam it was added to hide. `calc()` mixes the units. */
+    clip-path: inset(-1px round calc(var(--surface-radius, 0rem) + 1px));
   }
 
   .track-playlist-menu {
@@ -436,12 +574,30 @@ html body [data-slot="sidebar-gap"] {
   }
 
   /* The native macOS controls read as circularly rounded capsules at this
-     scale. Keep the whole Windows UI at the round K=1 endpoint so toolbars,
-     sidebars, menus, dialogs, controls, and their glass maps share that same
-     silhouette. */
-  .liquid-refract *,
-  .liquid-refract *::before,
-  .liquid-refract *::after {
+     scale. Keep the remaining Windows UI at the round K=1 endpoint so small
+     controls and their glass maps share that silhouette.
+
+     The three semantic surface systems are excluded, and so is everything
+     inside them. Excluding only the hosts is not enough: a blanket `round` on
+     descendants re-flattens the nested shapes the host is supposed to govern
+     (`.surface-item` rows, and any layer that inherits the host curve), which
+     is exactly the mismatch the shape contract exists to prevent. The
+     `:not(:is(... *))` half is what carves out the whole subtree. */
+  .liquid-refract
+    *:not(
+      :is(.surface-player, .surface-menu, .surface-sidebar),
+      :is(.surface-player, .surface-menu, .surface-sidebar) *
+    ),
+  .liquid-refract
+    *:not(
+      :is(.surface-player, .surface-menu, .surface-sidebar),
+      :is(.surface-player, .surface-menu, .surface-sidebar) *
+    )::before,
+  .liquid-refract
+    *:not(
+      :is(.surface-player, .surface-menu, .surface-sidebar),
+      :is(.surface-player, .surface-menu, .surface-sidebar) *
+    )::after {
     corner-shape: round;
   }
   .glass-material-small {
@@ -827,23 +983,9 @@ html body [data-slot="sidebar-gap"] {
     isolation: isolate;
   }
 
-  /* Album, playlist, and song artwork share Apple's continuous squircle
-     silhouette. The important flags keep caller-specific `rounded-md`/
-     `rounded-lg` utilities from changing the shared cover shape. Artist
-     artwork opts into `Thumbnail round` and remains circular. */
-  .squircle-cover,
-  .squircle-cover-frame {
-    border-radius: 60px !important;
-    corner-shape: squircle !important;
-  }
-
-  /* Explicitly mark layers that sit over a cover (play-state washes and
-     hairlines). Unlike the cover itself, these are sibling elements, so they
-     cannot inherit geometry unless their parent is a squircle-cover-frame. */
-  .squircle-cover-overlay {
-    border-radius: inherit !important;
-    corner-shape: squircle !important;
-  }
+  /* Artwork geometry is declared unlayered below, outside `@layer components`,
+     so it beats caller-specific `rounded-md`/`rounded-lg` utilities by layer
+     precedence instead of a priority override. */
 
   /* Match the Ultra thin glass rim on every square artwork cover. The mask
      keeps the highlight on the edge instead of washing over the artwork. */

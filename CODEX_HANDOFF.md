@@ -3,9 +3,9 @@
 > **Read this file first in every new Codex session.** It is the durable product,
 > engineering, UI, release, and troubleshooting context for this repository.
 >
-> Last verified: **2026-08-13**
-> Current app version: **0.7.1**
-> Current release state: **v0.7.1 published**
+> Last verified: **2026-08-14**
+> Current app version: **0.8.0**
+> Current release state: **v0.8.0 tagged; workflow publishing**
 > Latest public release: <https://github.com/AnalogicGoose/Goosic/releases/tag/v0.7.1>
 
 ## 1. New-session quick start
@@ -267,6 +267,15 @@ native observer bridge.
   downloaded-playlist queue construction.
 - `src/lib/ytdlp.ts` â€” passive managed-download setup/progress lifecycle.
 - `src/lib/query-client.ts` â€” query caching/persistence budgets.
+- `src/lib/playlist-library-cache.ts` â€” reconciles just-created/deleted
+  playlists against YouTube's eventually-consistent library index. A browse
+  issued right after `playlist/create` or `playlist/delete` frequently still
+  answers from a pre-mutation snapshot, so invalidation alone let the stale
+  response overwrite the change and the playlist stayed wrong until restart.
+  `fetchLibraryPlaylists` and `fetchUserPlaylists` both apply it, so no call
+  site can bypass it. A correction is retired only after *both* endpoints
+  agree (they lag independently), and `resetInnertube()` clears all pending
+  corrections so they cannot leak across accounts or channels.
 - `src/lib/store/playback.ts` â€” queue, history, repeat, shuffle, autoplay, and
   playback actions. The floating window uses a remote-control bridge. Persisted
   queue rows are normalized on migration so missing legacy/dev artwork becomes
@@ -435,22 +444,75 @@ native observer bridge.
 
 ## 7. Approved visual language
 
+### The three semantic shape systems
+
+Every rounded *surface* belongs to exactly one of three systems, declared
+unlayered in `src/index.css`. Do not add one-off `rounded-*` utilities,
+arbitrary `border-radius`, or inline geometry to a panel — pick its system:
+
+| Class | Used by | Radius | Corner shape |
+| --- | --- | --- | --- |
+| `.surface-player` | player panels, now-playing cards, player controls | `4rem` | `superellipse(1.1)` |
+| `.surface-menu` | dialogs, context menus, dropdowns, popovers, settings panels | `1.2rem` | `superellipse(1)` |
+| `.surface-sidebar` | the app sidebar and its contained surfaces | `0rem` | `superellipse(1)` |
+
+Each system owns its full geometry contract through CSS variables —
+`--surface-radius`, `--surface-corner-shape`, `--surface-overflow`,
+`--surface-outline` — so descendants resolve the host's shape by inheritance
+instead of restating a literal radius:
+
+- Glass pseudo-elements and any `.surface-layer` child inherit both radius and
+  corner shape.
+- Rows inside a surface use `.surface-item`, whose radius is derived as
+  `max(0.25rem, var(--surface-radius) - var(--surface-item-inset))`. Never give
+  a row its own radius: `rounded-md` resolves to the 34px token and renders as
+  a full capsule on a 32px row.
+- `.menu-shell-clip` derives its scrollbar clip from `--surface-radius`, so it
+  tracks the system automatically.
+- Menus clip horizontally but must stay scrollable vertically. The contract
+  splits the axes; scrollable menus opt in with `.surface-scroll-y` rather than
+  a layered `overflow-y-auto` utility, which an unlayered rule would outrank.
+- Surfaces clip to their shape, so anything that must paint *outside* a panel
+  (the bottom player's error banner) is a sibling of the glass element inside a
+  shared positioning shell — not a child.
+
+The SVG glass map reads `--surface-corner-shape` from computed style
+(`parseSuperellipseK` in `liquid-glass-defs.tsx`) rather than hardcoding an
+exponent per class, and the exponent is part of the filter cache key. Changing
+a system's corner shape therefore updates both the CSS silhouette and the glass
+refraction together.
+
+Surfaces are declared unlayered on purpose: Tailwind v4 emits all utilities
+inside `@layer utilities`, and layer precedence resolves before specificity, so
+an unlayered rule beats `rounded-*` without any priority override. `!important`
+remains banned repository-wide (see `CLAUDE.md`).
+
+Artwork is **not** a surface system — it is content, and keeps its own fixed
+`squircle` shape (see below).
+
 ### Geometry and spacing
 
-- The global Figma radius token is **34px**. `src/index.css` maps semantic
-  Tailwind radius tokens to `--radius: 34px`.
+- The global Figma radius token is **34px** (`--radius: 2.125rem`), which feeds
+  the semantic Tailwind radius utilities. Panel geometry comes from the three
+  surface systems above, not from this token.
+- Geometry values are expressed in `rem` (1rem = 16px; no `font-size` is set on
+  `:root`). Device-pixel details stay in `px` on purpose: 1px hairline
+  outlines, the `menu-shell-clip` antialiasing offset, the native window
+  radius, and the `9999px` scrollbar-thumb pill.
 - Do not blindly enlarge all content just because corners are large. The user
   prefers the newer Apple-like padding/material treatment with the older,
   compact content scale.
 - Song cards need enough internal padding that the artwork and text do not
   collide with rounded corners. Keep the artwork slightly inset rather than
   growing the entire card.
-- Square album, song, and playlist artwork uses `border-radius: 24px` with
+- Square album, song, and playlist artwork uses `border-radius: 1.4rem` with
   `corner-shape: squircle` through the shared `Thumbnail`; circular artist art
   remains circular. Square artwork also carries the shared 1.4px masked glass
   rim used by the Ultra thin material. Hover/play-state cover overlays must use
-  `squircle-cover-frame` and `squircle-cover-overlay` too: they are sibling
-  layers, so they do not inherit the thumbnail's shape on their own.
+  `squircle-cover-frame`, `squircle-cover-hover`, and `squircle-cover-overlay`
+  too: they are sibling layers, so they do not inherit the thumbnail's shape on
+  their own. These rules are declared unlayered rather than with `!important`,
+  which is how they outrank caller-supplied `rounded-*` utilities.
 - The immersive player's large cover uses the same masked rim (not a separate
   flat `border-hairline`) through `fullscreen-cover-rim`.
 - Explore's three top navigation tiles are visual surfaces rather than the grid
@@ -841,17 +903,21 @@ Interactive materials select the renderer by platform:
   capture at 14px frost, 1.2x saturation, 22% neutral shade, and 2% luminosity.
   The shade/luminosity pair is composited in the SVG chain so Subdued darkens
   while preserving album colour instead of becoming a high-frost milky bar.
-- The `liquid-refract` Windows platform class applies the visually calibrated
-  continuous-corner treatment across the entire UI: non-small glass surfaces
-  use a 32px radius and rounded boxes/pseudo-elements use
+- The `liquid-refract` Windows platform class applies the calibrated
+  continuous-corner treatment to small controls and their glass maps:
   `corner-shape: round` (K=1). K=2 and the intermediate K=1.35 curve were both
-  visibly flatter than the native macOS capture at the app's scale. SVG
-  displacement/specular maps use the same per-surface K=1 SDF; keeping a
-  flatter map curve here breaks the refracted ends. macOS is excluded because
-  its system controls/materials already use native continuous corners.
-- The bottom/floating player uses a constrained 9999px radius with the same
-  `corner-shape: round` (K=1), matching the native capsule silhouette. Its
-  cached SVG maps include that K=1 variant too.
+  visibly flatter than the native macOS capture at the app's scale. macOS is
+  excluded because its system controls/materials already use native continuous
+  corners.
+- That blanket rule explicitly excludes the three surface systems **and their
+  descendants** (`:not(:is(…), :is(…) *)`). Excluding only the hosts is not
+  enough: a blanket `round` on descendants re-flattens the nested shapes the
+  host governs (`.surface-item` rows, inherited glass layers), which is exactly
+  the mismatch the shape contract exists to prevent.
+- Panel radii and corner shapes now come from the surface systems in §7 rather
+  than from per-class rules here. SVG displacement/specular maps read the same
+  `--surface-corner-shape` the element is painted with, so a system's silhouette
+  and its refraction cannot drift apart.
 - A MutationObserver + ResizeObserver gives every live surface its own filter;
   detached portals are unregistered. Maps cap their longest raster edge at
   512px, release temporary canvas buffers immediately, and use a 16-entry LRU.
@@ -1492,6 +1558,15 @@ persisted and synchronized across native windows.
 - Rich Presence and notification behavior should remain user-controlled.
 
 ## 18. Recent release history
+
+- **`v0.8.0`** — fixes deleted offline downloads reappearing after a restart
+  (issue #8) and adds a "Remove download" action; fixes newly created and
+  deleted playlists not showing up until the app was restarted, by reconciling
+  against YouTube's eventually-consistent library index; stops the player
+  timeline stretching mid-song, which came from YouTube reporting a growing
+  stream's buffered extent as `media.duration`; and consolidates every rounded
+  panel into three semantic shape systems (`surface-player`, `surface-menu`,
+  `surface-sidebar`) with rem-based geometry and no `!important`.
 
 - **`v0.7.1`** â€” lowers normal browsing cost by reserving the animated album
   mesh for immersive now playing, adds blurred-cover backdrops, complete
