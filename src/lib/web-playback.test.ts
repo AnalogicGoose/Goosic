@@ -1,10 +1,50 @@
 import { describe, expect, it } from "vitest";
 import {
   isSeekHoldResolved,
+  quiesceRemotePlayback,
   WEB_SEEK_SETTLE_TIMEOUT_MS,
   WEB_SEEK_TOLERANCE_SECONDS,
   type WebSeekHold,
 } from "@/lib/web-playback";
+
+describe("quiesceRemotePlayback", () => {
+  it("awaits remote pause before a replacement owner can activate", async () => {
+    const calls: string[] = [];
+    let releasePause!: () => void;
+    const pause = new Promise<void>((resolve) => {
+      releasePause = resolve;
+    });
+    const pending = quiesceRemotePlayback(9, "pause", {
+      pause: async () => {
+        calls.push("pause-start");
+        await pause;
+        calls.push("pause-done");
+      },
+      reset: async () => {
+        calls.push("reset");
+      },
+    });
+
+    await Promise.resolve();
+    expect(calls).toEqual(["pause-start"]);
+    releasePause();
+    await pending;
+    expect(calls).toEqual(["pause-start", "pause-done"]);
+  });
+
+  it("uses reset when the next owner is local or no owner is selected", async () => {
+    const calls: string[] = [];
+    await quiesceRemotePlayback(9, "reset", {
+      pause: async () => {
+        calls.push("pause");
+      },
+      reset: async () => {
+        calls.push("reset");
+      },
+    });
+    expect(calls).toEqual(["reset"]);
+  });
+});
 
 const hold: WebSeekHold = { generation: 7, position: 198, requestedAt: 1_000 };
 const sample = (position: number, generation = 7) => ({

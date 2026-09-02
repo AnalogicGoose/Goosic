@@ -23,6 +23,13 @@ export type WebPlaybackState = {
   volume: number;
   muted: boolean;
   advertisement: boolean;
+  /**
+   * Effective Premium entitlement reported by the official page's own config,
+   * if it exposed one. Diagnostics only: the value can be a bootstrap default
+   * or carry client-specific semantics, and an advertisement is a normal part
+   * of official playback, so nothing here may gate the transport.
+   */
+  effectivePremium?: boolean | null;
   ended: boolean;
   /**
    * The requested track is over, including the samples between its completion
@@ -51,6 +58,32 @@ export type WebSeekHold = {
   position: number;
   requestedAt: number;
 };
+
+/**
+ * The remote owner must be quiesced before another owner is activated. A
+ * handoff to another online track awaits its pause; native code then destroys
+ * that renderer before creating the replacement. Switching to the local owner
+ * (or clearing the selection) awaits destruction here. Keeping this ordering
+ * in one helper prevents a caller from turning the pause into fire-and-forget
+ * work.
+ */
+export async function quiesceRemotePlayback(
+  generation: number,
+  mode: "pause" | "reset",
+  transport: {
+    pause: (generation: number) => Promise<void>;
+    reset: () => Promise<void>;
+  } = {
+    pause: (currentGeneration) => controlWebPlayer(currentGeneration, "pause"),
+    reset: resetWebPlayer,
+  },
+): Promise<void> {
+  if (mode === "reset") {
+    await transport.reset();
+    return;
+  }
+  await transport.pause(generation);
+}
 
 /**
  * Whether a pending seek hold is over, meaning the sample that triggered this

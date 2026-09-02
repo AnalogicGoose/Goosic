@@ -27,6 +27,7 @@ import {
   isSeekHoldResolved,
   isWebPlayerHealthy,
   loadWebTrack,
+  quiesceRemotePlayback,
   resetWebPlayer,
   type WebPlaybackState,
   type WebSeekHold,
@@ -477,6 +478,7 @@ export function useAudioEngine() {
         });
       return;
     }
+
     webFailureInFlightRef.current = false;
     selectionInProgressRef.current = false;
     const store = usePlaybackStore.getState();
@@ -747,10 +749,15 @@ export function useAudioEngine() {
       el.removeAttribute("src");
       el.load();
     }
-    void controlWebPlayer(webGenerationRef.current, "pause").catch(() => {});
+    const remoteQuiesce = quiesceRemotePlayback(
+      webGenerationRef.current,
+      playbackMode === "offline" || !selectedVideoId || !key
+        ? "reset"
+        : "pause",
+    );
     if (!selectedVideoId || !key) {
       ++webGenerationRef.current;
-      void resetWebPlayer()
+      void remoteQuiesce
         .then(() => {
           if (selection === selectionEpochRef.current) {
             selectionInProgressRef.current = false;
@@ -789,9 +796,13 @@ export function useAudioEngine() {
     store.setWebviewState(false, false);
     let disposed = false;
     void (async () => {
+      // Do not activate either owner until the old remote owner has completed
+      // its pause/reset. A fire-and-forget pause can race this load and leave
+      // the official WebView audible beside the new owner.
+      await remoteQuiesce;
+      if (disposed || selection !== selectionEpochRef.current) return;
       if (playbackMode === "offline") {
         ++webGenerationRef.current;
-        await resetWebPlayer();
         if (disposed || selection !== selectionEpochRef.current) return;
         if (!offlinePlaybackAllowed) {
           store.setBackend(
@@ -1027,6 +1038,14 @@ export function useAudioEngine() {
     previousDesiredPlayingRef.current = playing;
     if (selectionInProgressRef.current) return;
     if (backend === "webview") {
+      // The official player is the only allowed audio owner in this branch.
+      // Kill any stale local element immediately so a fast backend flip cannot
+      // leave the downloaded-file engine audible beside the WebView.
+      if (el.src) {
+        el.pause();
+        el.removeAttribute("src");
+        el.load();
+      }
       const store = usePlaybackStore.getState();
       if (playing && store.status === "idle") {
         store.setStatus("loading");
@@ -1099,6 +1118,10 @@ export function useAudioEngine() {
       return;
     }
     if (!el.src) return;
+    // The downloaded-file engine is the only allowed audio owner in this
+    // branch. Tear down the official player before starting the local element
+    // so a stale WebView cannot keep talking in parallel.
+    void resetWebPlayer().catch(() => {});
     if (playing) {
       const generation = activeMediaGenerationRef.current;
       void el.play().catch((e) => {

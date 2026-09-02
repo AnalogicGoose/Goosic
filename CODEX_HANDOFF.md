@@ -96,6 +96,9 @@ Current major capabilities:
 - Official YouTube Music WebPlayer playback for guests, free accounts, and
   Premium accounts, including YouTube's normal advertisements and restrictions.
 - Explicit Premium-only playlist downloads and validated local playback.
+- Playback ownership is exclusive: when the active backend changes, the
+  losing transport is actively torn down so the WebPlayer and the downloaded
+  file engine cannot keep playing at the same time.
 - Managed yt-dlp, Deno, and PO-token infrastructure used only by those
   explicit offline downloads; account cookies are never passed to yt-dlp.
 - Windows SMTC/media keys, tray, autostart, notifications, and single instance.
@@ -335,6 +338,13 @@ native observer bridge.
   official `music.youtube.com/watch` page in a guest profile or the active
   account's persistent profile, so YouTube's advertisements, regional limits,
   account restrictions, and entitlements remain intact.
+- Playback has one owner at a time across all backends. Before native reset or
+  force-destroy, `web_player.rs` dispatches a best-effort quiesce script that
+  pauses every `audio`/`video` element and clears the remote media-session
+  state; destruction waits until the `youtube-player` handle is absent. Every
+  WebView track load force-destroys the prior renderer before creating the
+  next one. Frontend selection awaits that remote pause/reset before activating
+  either the next WebView track or the singleton offline `HTMLAudioElement`.
 - The remote YouTube document has no Tauri capability. A versioned observer
   reports playback through a secret per-launch bridge: a loopback HTTP route on
   Windows, the secure `goosicbridge` URI scheme on Linux, and an origin-checked
@@ -352,9 +362,9 @@ native observer bridge.
 - The playback observer suppresses YouTube Music's `beforeunload` confirmation
   handler at document start. The hidden transport WebView has no user-editable
   form state to preserve, and allowing that handler would expose a browser
-  "Leave site?" dialog whenever Goosic navigates it to the next track.
+  "Leave site?" dialog whenever Goosic tears it down for the next track.
 - Goosic's persisted volume/mute state remains authoritative across WebPlayer
-  navigations. YouTube assigns its own persisted level (usually `1.0`) to a
+  track loads. YouTube assigns its own persisted level (usually `1.0`) to a
   replacement media element the instant it is created, which is earlier than
   any observer sample, `volumechange` listener, or native eval can react —
   that gap was audible as a short full-volume burst on track transitions.
@@ -398,6 +408,39 @@ native observer bridge.
 - Advertisements are detected only to keep the Goosic UI honest. Do not skip,
   mute, seek through, or otherwise bypass them. Show an Advertisement state and
   temporarily disable controls that the official page cannot safely support.
+- **A published terminal is permanent for the life of the observer document
+  (found 2026-09-02).** The sample loop used to clear `reportedTrackEnded`
+  whenever the requested content looked like it was playing near its start.
+  That is exactly how the page's OWN autoplay pick presents: it begins at
+  `currentTime` 0 while `playerApi`/`location` still report Goosic's id for
+  several hundred milliseconds. The reset therefore disarmed the volume
+  ceiling and the `play()`/`play`-event guards for the one track they exist to
+  stop, and the wrong song came back at full volume until identity caught up.
+  Reproduced in a DOM harness driving the real observer script: pre-fix the
+  page's pick ran unmuted at volume 1 for over two seconds; post-fix it is
+  silenced within ~80ms. Nothing needs the reset — a document plays exactly one
+  requested track, and every replay (repeat-one included, which bumps
+  `loadRevision`) is a new generation in a new document.
+- **A source reset on the element playing the requested track is the page
+  moving on.** YouTube Music's auto-advance can reuse that element rather than
+  building a new one, and a reset makes all three `play`-listener guards report
+  "still our track": `currentTime` returns to 0 and `duration` to NaN so
+  `mediaReachedEnd` is false, the element is still `requestedContentMedia`, and
+  the id is still stale. `emptied`/`loadstart` on that element — once it has
+  actually progressed (`observedRequestedProgress`) and outside advertisements
+  — arm the same terminal the sample loop would reach later through
+  `pageAdvancedPastRequest`.
+- **An advertisement must never gate the transport (regression, 2026-09-02).**
+  A guard once failed playback whenever Goosic's account probe said Premium and
+  the observer reported an ad, on the theory that a Premium session cannot see
+  one. It bricked playback outright: the account probe and the playback
+  WebView's YouTube session are different things and legitimately disagree, and
+  a `music.youtube.com/watch` load in a session without the entitlement starts
+  with a pre-roll at position 0 — verified live, where the ad selector matched
+  six elements at `currentTime` 0. Every track therefore failed terminally with
+  "could not verify Premium" and no retry. The observer still reports
+  `effectivePremium` from page config as a pure diagnostic; nothing may turn it
+  or the ad marker into an error, a stop, or a teardown.
 - Offline acquisition is a separate, explicit Premium feature on playlist
   pages. Goosic drains the requested playlist, downloads it sequentially, and
   exposes aggregate progress, cancellation, and retry. There is no per-track
@@ -617,7 +660,9 @@ the content/album background remains visible beneath it.
   `src-tauri/tauri.macos.conf.json`: native decorations, an overlay title bar,
   hidden title, and real AppKit traffic lights. `TopBar` reserves their left
   inset and must not render the Windows caption buttons on macOS. Windows and
-  Linux retain the custom right-side caption controls.
+  Linux retain the custom right-side caption controls. Keep the configured
+  `trafficLightPosition` at the Finder-aligned 18 by 26 logical-point inset;
+  AppKit preserves the individual controls' native size and spacing.
 - **macOS 26 (Tahoe) WKWebView black-window trap (found 2026-07-14):** putting
   `border-radius` + `overflow: hidden` on `#root` (the `native-rounded-window`
   clip) makes WKWebView's compositor drop the entire window's output. The app
@@ -1361,9 +1406,9 @@ Two constraints bound any fix, both verified against real `music.youtube.com`:
   "a mapped GTK surface is required" comment in that function is accurate.
 - **Hiding after startup is not enough.** Playback _does_ survive unmapping
   once it has started — `currentTime` keeps advancing with
-  `document.visibilityState === "hidden"` — but a fresh navigation performed
-  while unmapped initializes nothing, and Goosic navigates this WebView on
-  every track. "Show once, then hide forever" therefore does not fit.
+  `document.visibilityState === "hidden"` — but a fresh renderer created while
+  unmapped initializes nothing. Every track load recreates this WebView.
+  "Show once, then hide forever" therefore does not fit.
 
 So there is no client-side way on KDE to keep this toplevel both mapped and
 hidden. Any real fix is a trade-off (a 1×1 mapped window, a documented KWin
@@ -1747,11 +1792,12 @@ per track). Two findings worth keeping:
   prototype patch — independent confirmation of the fix above.
 - **It adopts the page's auto-advance when the pick matches its own queue's next
   track**, only overriding on disagreement, which avoids the navigation entirely
-  in the common case. Goosic navigates every time. Implementing this needs a
-  `retarget` control action, because `requestedVideoId` is baked into the
-  document at navigation time and adopting would immediately re-trigger
-  `pageAdvancedPastRequest`. **Not implemented** — it inverts the
-  `requested == playing` invariant that guards against wrong-track playback.
+  in the common case. Goosic force-destroys the renderer for every load.
+  Implementing adoption would need a `retarget` control action, because
+  `requestedVideoId` is baked into the document at creation time and adopting
+  would immediately re-trigger `pageAdvancedPastRequest`. **Not implemented**
+  — it inverts the `requested == playing` invariant that guards against
+  wrong-track playback.
 
 Goosic already has Kaset's double-advance protection, expressed per generation
 (`handledWebEndedGenerationRef`, `handledFailureGenerationRef`) with backends

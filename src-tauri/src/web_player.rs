@@ -177,6 +177,13 @@ pub struct PlaybackStateEvent {
     pub volume: f64,
     pub muted: bool,
     pub advertisement: bool,
+    /// Page-config entitlement diagnostic, for answering "does the playback
+    /// WebView's own YouTube session have Premium?" when troubleshooting.
+    /// `None` is deliberately allowed, and nothing may gate the transport on
+    /// this: the values can be bootstrap defaults or client-specific, and an
+    /// advertisement is a normal part of official playback.
+    #[serde(default)]
+    pub effective_premium: Option<bool>,
     pub ended: bool,
     /// The requested track is over, whether or not its one-shot terminal event
     /// has already been published for this generation.
@@ -500,6 +507,29 @@ const PAGE_AD_SELECTOR: &str = ".ad-showing, ytmusic-player-bar[ad-playing], \
 const PAGE_PLAY_BUTTON_SELECTOR: &str =
     "ytmusic-player-bar #play-pause-button,#movie_player .ytp-play-button";
 
+/// Stop every media element before its WebView is destroyed. The official page
+/// can retain more than one element
+/// while swapping tracks (and can schedule autoplay in a microtask), so
+/// stopping only the element returned by `PAGE_MEDIA_EXPR` is not enough to
+/// guarantee that the next owner starts alone.
+const QUIESCE_MEDIA_SCRIPT: &str = r#"
+(() => {
+  try { window.__goosicQuiescing = true; } catch {}
+  for (const media of Array.from(document.querySelectorAll('audio,video'))) {
+    try { media.autoplay = false; } catch {}
+    try { media.removeAttribute('autoplay'); } catch {}
+    try { media.pause(); } catch {}
+  }
+  try {
+    const session = navigator.mediaSession;
+    if (session) {
+      session.playbackState = 'none';
+      session.metadata = null;
+    }
+  } catch {}
+})()
+"#;
+
 // The three constants above are Goosic's only structural coupling to a DOM
 // YouTube can restructure without notice, and the observer script, the
 // transport scripts and the state probe all need the same answers. Keep them
@@ -672,7 +702,7 @@ fn observer_script(bridge_url: &str) -> String {
       // should ever be audible again. Mute at the source: the reactive pause()
       // in the sample loop is up to one 250ms tick behind, which is exactly
       // the audible burst of the wrong song the user heard between tracks.
-      if (pendingContentEnded || reportedTrackEnded) {{
+      if (window.__goosicQuiescing || pendingContentEnded || reportedTrackEnded) {{
         try {{ this.muted = true; }} catch {{}}
         try {{ this.volume = 0; }} catch {{}}
       }} else {{
@@ -698,6 +728,10 @@ fn observer_script(bridge_url: &str) -> String {
       try {{ media.volume = 0; }} catch {{}}
       try {{ media.pause(); }} catch {{}}
     }};
+    if (window.__goosicQuiescing) {{
+      silence();
+      return;
+    }}
     if (pendingContentEnded || reportedTrackEnded) {{
       silence();
       return;
@@ -776,6 +810,11 @@ fn observer_script(bridge_url: &str) -> String {
   // for. Until then a mismatched video id is a wrong-track load; afterwards it
   // means the page's own autoplay queue moved past our track.
   let observedRequestedContent = false;
+  // True once the requested track has actually advanced past its own start.
+  // Source-reset detection keys off this rather than `observedRequestedContent`
+  // so that buffering churn during the initial load cannot be mistaken for the
+  // page moving on.
+  let observedRequestedProgress = false;
   const findMedia = () => {PAGE_MEDIA_EXPR};
   const detectAd = () => !!document.querySelector('{PAGE_AD_SELECTOR}');
   const readActualVideoId = () => {{
@@ -799,6 +838,20 @@ fn observer_script(bridge_url: &str) -> String {
     try {{
       const fromLocation = new URL(location.href).searchParams.get('v');
       if (typeof fromLocation === 'string' && fromLocation) return fromLocation;
+    }} catch {{}}
+    return null;
+  }};
+  // Capture explicit page-config entitlement as a diagnostic only. These
+  // values can be bootstrap/transient or carry client-specific semantics, so a
+  // raw `false` is not proof of a free session and nothing may gate playback
+  // on it. See the advertisement rules in CODEX_HANDOFF.md.
+  const readEffectivePremium = () => {{
+    try {{
+      const config = window.ytcfg;
+      for (const key of ['IS_PREMIUM', 'IS_SUBSCRIBER', 'PREMIUM_ENABLED']) {{
+        const value = config?.get?.(key);
+        if (typeof value === 'boolean') return value;
+      }}
     }} catch {{}}
     return null;
   }};
@@ -915,6 +968,44 @@ fn observer_script(bridge_url: &str) -> String {
         }}
         schedulePost();
       }}, {{ passive: true }});
+      // YouTube Music's own auto-advance usually REUSES the element it was
+      // just playing: it resets that element's source instead of building a
+      // new one. That path walked straight through every guard in the `play`
+      // listener at the one instant they had to hold, because a source reset
+      // makes all three tests report "still our track":
+      //   - `currentTime` is back to 0 and `duration` back to NaN, so
+      //     `mediaReachedEnd` is false,
+      //   - the element is still `requestedContentMedia`, so the element test
+      //     passes, and
+      //   - `playerApi`/`location` keep reporting the old id for a while after
+      //     the pick starts, so the id test passes too.
+      // The page's pick was therefore audible until the 250ms sample loop saw
+      // the id finally change — the wrong song for a few seconds, worst on
+      // Windows where the loopback bridge puts every recovery step further
+      // behind. The reset is the one fact known synchronously, so arm the
+      // terminal on it instead of waiting for identity to corroborate it.
+      for (const resetEvent of ['emptied', 'loadstart']) {{
+        media.addEventListener(resetEvent, () => {{
+          if (observedMedia !== attachedMedia) return;
+          // Before our own track has been observed these events are just the
+          // page loading it, and an advertisement legitimately owns the
+          // element it is playing in.
+          if (!observedRequestedProgress || observedMedia !== requestedContentMedia) return;
+          if (detectAd() || lastObservedAd) return;
+          if (pendingContentEnded || reportedTrackEnded) return;
+          // Same terminal the sample loop reaches through `pageAdvancedPastRequest`,
+          // just recorded at the instant it becomes true instead of one or more
+          // samples later, once identity has caught up.
+          pendingContentEnded = true;
+          pendingContentEndedPageMoved = true;
+          pendingContentEndedSawAd = false;
+          pendingContentEndedNonAdSamples = 0;
+          try {{ media.muted = true; }} catch {{}}
+          try {{ media.volume = 0; }} catch {{}}
+          try {{ media.pause(); }} catch {{}}
+          schedulePost();
+        }}, {{ passive: true }});
+      }}
       for (const eventName of [
         'loadedmetadata', 'durationchange', 'timeupdate', 'play', 'playing',
         'pause', 'waiting', 'stalled', 'seeking', 'seeked', 'volumechange',
@@ -979,7 +1070,7 @@ fn observer_script(bridge_url: &str) -> String {
     const finished = pendingContentEnded || reportedTrackEnded;
     // Silence whatever the page picked for itself. Goosic's queue owns the
     // next track, and without this the page's choice stays audible for as long
-    // as it takes the completion to reach React and navigate this WebView.
+    // as it takes the completion to reach React and recreate this WebView.
     if (finished && media && !ad && !lastObservedAd && !actualMatchesRequested && !media.paused) {{
       media.pause();
     }}
@@ -998,10 +1089,20 @@ fn observer_script(bridge_url: &str) -> String {
     if (requestedContentPlaying) {{
       suppressEndedUntilContentPlaying = false;
       autoplayAttempts = 0;
-      if (media.currentTime < Math.max(1, (Number.isFinite(media.duration) ? media.duration : 0) - 1)) {{
-        reportedTrackEnded = false;
-      }}
+      if (media.currentTime > 0) observedRequestedProgress = true;
     }}
+    // `reportedTrackEnded` is never cleared. It used to be reset here whenever
+    // the requested content looked like it was playing near its start, which
+    // was exactly the state the page's OWN autoplay pick presents: it begins at
+    // currentTime 0 while `playerApi`/`location` still report our id for a few
+    // hundred milliseconds. That reset therefore disarmed the volume ceiling
+    // and the play()/`play`-event guards for the one track they exist to stop,
+    // and the page's pick came back at full volume until identity caught up --
+    // the wrong song for a few seconds, worst on Windows where the loopback
+    // bridge lands every recovery step later. Nothing needs the reset: a
+    // document plays exactly one requested track, and every replay (including
+    // repeat-one, which bumps `loadRevision`) is a new generation in a new
+    // document.
     let ended = false;
     if (pendingContentEnded && !ad && !reportedTrackEnded) {{
       if (pendingContentEndedSawAd || pendingContentEndedPageMoved) {{
@@ -1037,6 +1138,7 @@ fn observer_script(bridge_url: &str) -> String {
       volume: Number.isFinite(media?.volume) ? media.volume : 1,
       muted: !!media?.muted,
       advertisement: ad,
+      effectivePremium: readEffectivePremium(),
       ended,
       // The requested track is over even if its terminal event has not been
       // published yet. React uses this to stop re-issuing `play` at a document
@@ -1421,21 +1523,39 @@ fn data_store_identifier(profile_key: &str) -> [u8; 16] {
 }
 
 async fn close_player(app: &tauri::AppHandle) -> Result<(), String> {
+    let mut errors = Vec::new();
     if let Some(window) = app.get_webview_window(PLAYER_LABEL) {
-        window
-            .close()
-            .map_err(|error| format!("close YouTube player: {error}"))?;
+        if let Err(error) = quiesce_player(&window) {
+            // Destroying the WebView is the authoritative teardown boundary.
+            // Keep a failed best-effort media pause diagnostic, but do not
+            // prevent a replacement when the renderer is actually gone.
+            eprintln!("[web-player] {error}");
+        }
+        if let Err(error) = window.destroy() {
+            errors.push(format!("destroy YouTube player: {error}"));
+        }
     }
     let deadline = tokio::time::Instant::now() + CLOSE_TIMEOUT;
     loop {
         if app.get_webview_window(PLAYER_LABEL).is_none() {
-            return Ok(());
+            return if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors.join("; "))
+            };
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err("timed out closing YouTube player".into());
+            errors.push("timed out destroying YouTube player".into());
+            return Err(errors.join("; "));
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
+}
+
+fn quiesce_player(window: &tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .eval(QUIESCE_MEDIA_SCRIPT)
+        .map_err(|error| format!("quiesce YouTube player media: {error}"))
 }
 
 pub async fn close_keepers(app: &tauri::AppHandle) -> Result<(), String> {
@@ -1795,29 +1915,25 @@ pub async fn load(
     };
     let url = playback_url(&video_id, generation, playing, volume, muted)?;
 
-    let current_profile = state.inner.lock().await.profile_key.clone();
     let had_player = app.get_webview_window(PLAYER_LABEL).is_some();
-    let recreate = had_player && current_profile != profile_key;
 
     // A keeper and player cannot concurrently own the same WebView2 data dir.
     // Do this before closing a healthy existing player: a keeper failure then
     // leaves the old owner and its state intact instead of producing silence.
     close_keepers(app).await?;
 
-    if recreate {
+    if had_player {
+        // A WebView is never reused for another track. Force-destroy the old
+        // renderer after quiescing it, and wait for its label to disappear
+        // before creating the next renderer.
         close_player(app).await?;
         clear_player_state(state).await;
-    } else if !had_player {
+    } else {
         // Heal stale state left by an externally-terminated content window.
         clear_player_state(state).await;
     }
 
-    let window = if let Some(window) = app.get_webview_window(PLAYER_LABEL) {
-        window
-            .navigate(url)
-            .map_err(|error| format!("navigate YouTube player: {error}"))?;
-        window
-    } else {
+    let window = {
         std::fs::create_dir_all(&profile_dir)
             .map_err(|error| format!("create playback profile: {error}"))?;
         let builder = WebviewWindowBuilder::new(app, PLAYER_LABEL, WebviewUrl::External(url))
@@ -1890,6 +2006,13 @@ pub async fn control(
     value: Option<f64>,
 ) -> Result<(), String> {
     let _lifecycle = state.lifecycle.lock().await;
+    // Pausing is an idempotent owner-release operation. During startup there
+    // is legitimately no remote WebView yet; treating that as success lets
+    // frontend selection await the release boundary without manufacturing a
+    // race or an error state.
+    if action == "pause" && app.get_webview_window(PLAYER_LABEL).is_none() {
+        return Ok(());
+    }
     let inner = state.inner.lock().await;
     if generation != inner.generation {
         return Err("stale playback generation".into());
@@ -2137,7 +2260,7 @@ mod tests {
         actual_video_matches_requested, bridge_endpoint, bridge_scheme_route, control_script,
         gate_ended_event, heartbeat_is_fresh, is_unexpected_track, load_state_script,
         observer_script, playback_url, sequence_is_fresh, trusted_navigation,
-        wait_for_identity_result, WebPlayerState, HEALTH_HEARTBEAT_TIMEOUT,
+        wait_for_identity_result, WebPlayerState, HEALTH_HEARTBEAT_TIMEOUT, QUIESCE_MEDIA_SCRIPT,
         WINDOWS_WS_EX_APPWINDOW, WINDOWS_WS_EX_NOACTIVATE, WINDOWS_WS_EX_TOOLWINDOW,
     };
 
@@ -2372,6 +2495,9 @@ mod tests {
         // WKWebView and WebKitGTK can leave `playerApi` undefined while playing
         // normally, so identity must have a second source.
         assert!(script.contains("new URL(location.href).searchParams.get('v')"));
+        assert!(script.contains("readEffectivePremium"));
+        assert!(script.contains("effectivePremium: readEffectivePremium()"));
+        assert!(script.contains("IS_SUBSCRIBER"));
     }
 
     #[test]
@@ -2399,6 +2525,17 @@ mod tests {
     }
 
     #[test]
+    fn quiesce_script_stops_every_remote_media_element_before_close() {
+        assert!(QUIESCE_MEDIA_SCRIPT.contains("querySelectorAll('audio,video')"));
+        assert!(QUIESCE_MEDIA_SCRIPT.contains("window.__goosicQuiescing = true"));
+        assert!(QUIESCE_MEDIA_SCRIPT.contains("media.autoplay = false"));
+        assert!(QUIESCE_MEDIA_SCRIPT.contains("media.removeAttribute('autoplay')"));
+        assert!(QUIESCE_MEDIA_SCRIPT.contains("media.pause()"));
+        assert!(QUIESCE_MEDIA_SCRIPT.contains("session.playbackState = 'none'"));
+        assert!(QUIESCE_MEDIA_SCRIPT.contains("session.metadata = null"));
+    }
+
+    #[test]
     fn observer_caps_output_before_any_media_element_can_be_heard() {
         let script = observer_script("http://127.0.0.1:1234/secret/web-player/state");
         let ceiling = script
@@ -2414,6 +2551,7 @@ mod tests {
             ceiling < first_media_query && play_guard < first_media_query,
             "output guards must be installed before the page can create media"
         );
+        assert!(script.contains("window.__goosicQuiescing || pendingContentEnded"));
         assert!(script.contains("Math.min(Math.max(requested, 0), ceiling)"));
     }
 
@@ -2444,6 +2582,45 @@ mod tests {
             "if (pendingContentEnded || reportedTrackEnded || mediaReachedEnd(media)) return;"
         ));
         assert!(script.contains("finished,"));
+    }
+
+    /// YouTube Music's auto-advance can reuse the element it was already
+    /// playing, resetting that element's source instead of creating a new one.
+    /// At that instant every identity-based guard still reports "our track", so
+    /// the reset itself has to be the trigger.
+    #[test]
+    fn observer_treats_a_source_reset_of_the_playing_element_as_the_page_moving_on() {
+        let script = observer_script("http://127.0.0.1:1234/secret/web-player/state");
+        assert!(script.contains("for (const resetEvent of ['emptied', 'loadstart'])"));
+        // Matched as single-line tokens: this file is rewritten with CRLF on
+        // Windows, which silently breaks any assertion spanning a newline.
+        assert!(script.contains(
+            "if (!observedRequestedProgress || observedMedia !== requestedContentMedia) return;"
+        ));
+        // An advertisement legitimately owns the element it plays in, and a
+        // terminal that is already armed must not be re-armed.
+        assert!(script.contains("if (detectAd() || lastObservedAd) return;"));
+        assert!(script.contains("if (pendingContentEnded || reportedTrackEnded) return;"));
+        // Buffering churn during the initial load is not the page moving on.
+        assert!(script.contains("if (media.currentTime > 0) observedRequestedProgress = true;"));
+    }
+
+    /// A published terminal is permanent for the life of the document. The
+    /// page's own autoplay pick presents exactly as "requested content playing
+    /// near its start" while identity lags, so re-arming output on that state
+    /// disarmed every guard for the one track they exist to stop.
+    #[test]
+    fn observer_never_re_arms_output_after_reporting_the_track_ended() {
+        let script = observer_script("http://127.0.0.1:1234/secret/web-player/state");
+        // The only `= false` is the declaration; nothing assigns it later.
+        assert_eq!(
+            script.matches("reportedTrackEnded = false;").count(),
+            1,
+            "a document plays one requested track; every replay is a new document"
+        );
+        assert!(script.contains("let reportedTrackEnded = false;"));
+        // The terminal is still set once, on a successful bridge post.
+        assert!(script.contains("reportedTrackEnded = true;"));
     }
 
     /// The `play` event is the earliest synchronous notice that the official
