@@ -308,7 +308,10 @@ jobs:
 
   build-macos:
     needs: [create-release, build-linux]
-    runs-on: macos-15
+    # Xcode 27 supplies the macOS 27 SDK so packaged native AppKit window
+    # chrome receives the current macOS design. The app still supports macOS
+    # 14 through tauri.macos.conf.json's minimumSystemVersion.
+    runs-on: xcode-27
     permissions:
       contents: write
     steps:

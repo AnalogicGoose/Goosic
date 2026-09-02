@@ -1419,9 +1419,12 @@ Ubuntu GitHub runner.
 
 ### macOS build contract
 
-The release workflow builds `universal-apple-darwin` on `macos-15`, combining
-Apple Silicon and Intel targets into one app/DMG. Platform jobs remain
-sequential so their `tauri-action` invocations append safely to one release.
+The release workflow builds `universal-apple-darwin` on the GitHub Actions
+`xcode-27` image, using the macOS 27 SDK while combining Apple Silicon and
+Intel targets into one app/DMG. The deployment target remains macOS 14.0
+through `tauri.macos.conf.json`, so using the newer SDK does not drop support
+for older supported systems. Platform jobs remain sequential so their
+`tauri-action` invocations append safely to one release.
 
 No Apple Developer certificate or notarization credentials are currently
 configured. The workflow uses `APPLE_SIGNING_IDENTITY: "-"` for an ad-hoc code
